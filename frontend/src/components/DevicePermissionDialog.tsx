@@ -140,12 +140,12 @@ export const DevicePermissionDialog: React.FC<DevicePermissionDialogProps> = ({
           <div className="pt-1 border-t border-[#1A1A1A]/10 space-y-2">
             <h4 className="text-xs font-mono uppercase text-[#1A1A1A] font-semibold pt-3">Grant Permissions</h4>
 
-            <PermissionRow
-              label="Read shared storage"
-              description="Always available to any paired device — not a real choice."
-              checked
-              disabled
-            />
+            {/* Intentionally not a checkbox — read access is always enabled and isn't a real
+                choice, so it isn't modeled as a toggle. Exactly four toggles follow. */}
+            <p className="text-[11px] text-[#76746E] px-3 py-2 bg-[#F9F8F6] border border-[#1A1A1A]/10">
+              Read access is always enabled for any paired device.
+            </p>
+
             <PermissionRow
               label="Share this device's storage"
               description="Allow this device to initiate storage-sharing requests to others."

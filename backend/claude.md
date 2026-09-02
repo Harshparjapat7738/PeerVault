@@ -691,3 +691,36 @@ still has no ownership check tying the confirming caller to the account that ran
 JWT-authenticated caller of `pair/init` and the JWT-authenticated caller of `pair/confirm` can be two
 different accounts today (same trust level the PIN flow had; not widened, not closed, by this
 refactor).
+
+### Task 9 addendum — doc/UI alignment pass, no new enforcement
+
+A follow-up review compared a hand-written "complete workflow summary" of this feature against the
+actual code and found the summary overstated several things Task 9 deliberately didn't build. This
+pass is documentation- and UI-only — **no enforcement logic was added** — closing the gaps between
+what was claimed and what's real:
+
+- `backend/README.md` had zero mention of the real P2P/relay endpoints (Tasks 5/6) or how they
+  relate to `share-service`'s grant flow (Tasks 1–4) — the two were never distinguished anywhere.
+  Added a "Storage sharing vs. real transfer modes" section spelling out the actual paths
+  (`/api/v1/transfers/p2p/*`, `/api/v1/transfers/relay/*` — explicitly *not* a bare
+  `/transfers/upload`/`/transfers/download`, which is a different, older, fully-simulated endpoint
+  pair), the explicit "no permission enforcement on these endpoints" statement, and the GridFS-not-
+  S3 storage note. Also added a "Device pairing: what's real" section restating the TTL/payload/
+  no-qrImageUrl/no-new-Kafka-event/no-real-time-notification facts from the Task 9 summary above, and
+  added the previously-missing `share-service` row to the Service Map table.
+- **New `frontend/src/components/TransferProgress.tsx`** — a small, purely presentational
+  "Sharing data…" indicator (spinner while in progress, checkmark on success, error state), shared
+  by both real transfer surfaces: wired into `TransferProgressP2P.tsx` (mapped from the real WebRTC
+  connection phase — no numeric progress, since a handshake has no byte count) and into
+  `TransferManager.tsx`'s per-task rows (mapped from `TransferTask.status`, with real percentage
+  progress for `transferring` tasks). It renders whatever status/progress its caller already has; it
+  doesn't call any API itself.
+- Tightened `DevicePermissionDialog`'s "read is always on" row from a disabled-but-rendered checkbox
+  to a plain text note — the permission grant now renders exactly four interactive toggles
+  (`canShareStorage`/`canWrite`/`canDelete`/`canShareFurther`), no checkbox-shaped element for read
+  access at all.
+- Everything else the review's gap list called out (`PairingSession` naming, 120s TTL, no
+  `qrImageUrl`, no `/devices/pair/scan` route, exact QR payload shape with no `user=` param, embedded
+  `sharingPermissions` field rather than a separate collection, no `DEVICE_PAIRED_VIA_QR` event, no
+  real-time notify-the-generating-device) was already true of the code Task 9 shipped — verified by
+  re-reading the relevant files, not just trusting the earlier write-up.

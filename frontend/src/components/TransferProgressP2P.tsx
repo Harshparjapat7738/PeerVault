@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Zap, Wifi, WifiOff, Loader2, CheckCircle2, XCircle, Radio } from 'lucide-react';
 import { sendP2POffer, sendP2PAnswer, sendP2PIceCandidate } from '../api-client';
 import { subscribeStomp } from '../stomp-client';
+import { TransferProgress, TransferProgressStatus } from './TransferProgress';
 
 /**
  * A real (not simulated) WebRTC handshake, driven by transfer-service's signaling relay
@@ -126,6 +127,14 @@ export const TransferProgressP2P: React.FC<TransferProgressP2PProps> = ({ transf
   };
   const current = phaseDisplay[phase];
 
+  // Maps the real WebRTC connection phase onto the shared "sharing data…" indicator — there's no
+  // byte count for a handshake, so `progress` is intentionally omitted (see TransferProgress.tsx).
+  const sharingStatus: TransferProgressStatus | null =
+    phase === 'negotiating' || phase === 'connecting' ? 'in-progress' :
+    phase === 'connected' ? 'success' :
+    phase === 'failed' ? 'error' :
+    null;
+
   return (
     <div className="bg-[#FFFFFF] border border-[#1A1A1A]/20 p-5 space-y-3 shadow-xs">
       <div className="flex items-center justify-between">
@@ -137,6 +146,10 @@ export const TransferProgressP2P: React.FC<TransferProgressP2PProps> = ({ transf
           <button onClick={onClose} className="text-[#76746E] hover:text-[#1A1A1A] text-xs cursor-pointer">✕</button>
         )}
       </div>
+
+      {sharingStatus && (
+        <TransferProgress mode="p2p" status={sharingStatus} errorMessage="WebRTC connection failed." />
+      )}
 
       <div className={`inline-flex items-center space-x-1.5 px-2.5 py-1 font-mono text-[10px] uppercase font-semibold border ${current.className} border-current/30 bg-current/5`}>
         {current.icon}

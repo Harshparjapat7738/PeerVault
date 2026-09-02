@@ -104,6 +104,7 @@ mvn -pl device-service -am spring-boot:run
 | `transfer-service` | 8084 | `transfer_db` | Transfer orchestration + simulated progress ticker |
 | `security-service` | 8085 | `security_db` | Hash-chained audit ledger, STRIDE matrix, ransomware shield |
 | `notification-service` | 8086 | — | Kafka → STOMP/WebSocket relay (`/ws`) |
+| `share-service` | 8087 | `share_db` | Cross-device/cross-user share requests, accept/reject, shared-storage grants |
 
 All traffic should go through the gateway (`:8080`) in normal use — the direct service ports are exposed
 only for local debugging.
@@ -154,6 +155,52 @@ curl -s -X POST http://localhost:8080/api/v1/security/revoke-all-sessions -H "Au
 Full endpoint list is in the plan doc's "Per-service contracts" section; every response DTO mirrors
 `../src/types.ts` field-for-field, so the existing frontend components could be wired to these endpoints with
 a thin API-client swap for their current mock-data props.
+
+## Storage sharing vs. real transfer modes — two separate subsystems
+
+These are easy to conflate but are deliberately independent:
+
+- **`share-service`** (`/api/v1/share/**`) governs *grants*: `POST /api/v1/share/request` → the
+  target `POST /api/v1/share/request/{id}/accept` (creates a `SharedStorage` grant) → file access
+  through that grant is then proxied via `GET/POST/DELETE /api/v1/share/storage/{id}/files/**`,
+  which share-service forwards to `file-service` on the caller's behalf.
+- **`transfer-service`** owns the actual bytes-moving mechanisms, and does **not** know about
+  `SharedStorage` grants at all:
+  - Real WebRTC signaling: `POST /api/v1/transfers/p2p/initiate`, `.../{id}/offer`,
+    `.../{id}/answer`, `.../{id}/ice-candidate`. The backend only relays SDP/ICE blobs — it cannot
+    run WebRTC itself.
+  - Real relay storage (genuinely stored server-side, not simulated): `POST
+    /api/v1/transfers/relay/upload` (multipart), `POST /api/v1/transfers/relay/{id}/download`,
+    `GET /api/v1/transfers/relay/{id}/status`. There is no bare `/api/v1/transfers/upload` or
+    `/api/v1/transfers/download` for these — those paths belong to the older, fully-simulated
+    `POST /api/v1/transfers/direct` / `POST /api/v1/transfers/download` flow (step 4 above), an
+    unrelated pre-existing feature.
+  - Storage backing relay mode is **GridFS (the same MongoDB every service already uses)**, not
+    S3/MinIO — chosen specifically to avoid standing up new infrastructure.
+  - **Neither `p2p/initiate` nor `relay/upload` validates any sharing/ownership permission.** This
+    is a known, deliberate gap, not an oversight: a device's `sharingPermissions` (granted at QR
+    pairing time, see below) are currently stored only — nothing in `transfer-service` or
+    `share-service` reads or enforces them yet. Treat these endpoints as unauthenticated-by-grant
+    (they still require a valid JWT) until that enforcement is built.
+
+## Device pairing: what's real vs. what the QR payload actually carries
+
+`POST /api/v1/devices/pair/init` / `.../pair/confirm` is QR-only — there has never been a manual
+fallback code in this flow. A few specifics worth being precise about:
+
+- The pairing session's own id (a UUID) *is* the pairing secret; there's no separate human-typed
+  code anywhere. It's embedded only in `qrPayload`, e.g. `peervault://pair?session=<id>&fp=<fingerprint>`
+  — no `user=` parameter or anything else is present in that URI.
+- Session TTL is **120 seconds** (`peervault.pairing.ttl-seconds`), not 5 minutes.
+- The `pair/init` response never includes a `qrImageUrl` or any backend-rendered image — the QR
+  *image* is rendered client-side (from `qrPayload`) by whichever device is showing it.
+- `pair/confirm`'s `permissions` object is stored as a field directly on the `Device` document
+  (`sharingPermissions`) — there is no separate `SharingPermission` collection, and confirming does
+  not publish a distinct "device paired via QR" event; it publishes the same `DomainEvent`
+  (`AuditEventType.DEVICE_PAIR`) to `device-events` that device pairing always has.
+- There is no real-time notification back to the device that generated the QR. Only the browser
+  that called `pair/confirm` gets the result (via its own response) — the generating device has no
+  live way to learn pairing succeeded in this iteration.
 
 ## Kafka topics
 

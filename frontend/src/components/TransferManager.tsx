@@ -17,6 +17,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { TransferTask, TransferStatus } from '../types';
+import { TransferProgress, TransferProgressStatus } from './TransferProgress';
 
 interface TransferManagerProps {
   transfers: TransferTask[];
@@ -168,12 +169,31 @@ export const TransferManager: React.FC<TransferManagerProps> = ({
             const isTransferring = task.status === 'transferring';
             const isPaused = task.status === 'paused';
 
+            // Lightweight "sharing data…" indicator, shared with TransferProgressP2P — see
+            // TransferProgress.tsx. Only shown for the statuses it actually models; queued/
+            // negotiating/paused/cancelled keep their existing status badge below instead.
+            const sharingStatus: TransferProgressStatus | null =
+              task.status === 'transferring' ? 'in-progress' :
+              task.status === 'completed' ? 'success' :
+              task.status === 'failed' ? 'error' :
+              null;
+
             return (
               <div
                 key={task.id}
                 id={`transfer-task-${task.id}`}
                 className="bg-[#FFFFFF] border border-[#1A1A1A]/20 p-6 space-y-4 shadow-xs"
               >
+                {sharingStatus && (
+                  <TransferProgress
+                    mode={task.mode === 'p2p_direct' ? 'p2p' : 'relay'}
+                    status={sharingStatus}
+                    progress={sharingStatus === 'in-progress' ? percentage : undefined}
+                    targetDeviceName={task.targetDeviceName}
+                    errorMessage={`${task.name} could not be transferred.`}
+                  />
+                )}
+
                 {/* Header Row */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="space-y-1">
