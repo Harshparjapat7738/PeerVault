@@ -12,6 +12,7 @@ control plane described in `README.md`. New service: **share-service (port 8087)
 - [x] Task 6: Relay Mode (Server-Mediated)
 - [x] Task 7: Audit + Security Integration
 - [x] Task 8: Frontend Integration + Testing
+- [x] Task 9: QR-Code-Only Device Pairing (Refactored from PIN-based) - 2026-09-02
 
 ## All tasks complete 🎉
 
@@ -605,3 +606,88 @@ Dockerfiles already build with `-DskipTests` explicitly, so the container-build 
 
 **Verified:** full `mvn package` (all 11 modules, both new test suites' main+test sources compiled)
 and `npx tsc --noEmit` on `frontend/` both clean.
+
+## Task 9 summary — QR-Code-Only Device Pairing (ground-up refactor) ✅
+
+**Removed all PIN-based pairing, replaced with a real QR-scan-only handshake plus an explicit
+granular-permission grant.** Device pairing pre-existed this task (`device-service` +
+`DevicePairingModal.tsx`) as a hybrid: real EC (P-256) keypair + SHA-256 fingerprint generation
+server-side, but the pairing secret was a human-typed 6-digit PIN, `qrPayload` was returned by the
+API but never actually rendered as a scannable code, and the modal never called the real
+`pair/init`/`pair/confirm` endpoints at all — it fabricated a fake `Device` client-side. All three of
+those are now real.
+
+**Simplification, not just a rename: the pairing session's own Mongo `_id` (already a
+`UUID.randomUUID()`) is now the one and only pairing secret**, embedded solely in the QR payload
+(`peervault://pair?session=<sessionId>&fp=<fingerprint>`) — no separate human-typable code exists
+anywhere, so there's nothing to fall back to manual entry with. `PairingSession.pairingCode`,
+`PairingCryptoService.generatePin()`, and `PairingSessionRepository.findByPairingCodeAndConsumedFalse`
+are all deleted outright; confirm now looks the session up by the inherited `findById`, then
+explicitly checks `consumed` (400 `PAIRING_ALREADY_CONSUMED`, a real gap the old code didn't
+distinguish from "not found") and `expiresAt` (400 `PAIRING_EXPIRED`) exactly as before.
+
+**New `common/dto/SharingPermissionsDto`** (`canShareStorage`, `canWrite`, `canDelete`,
+`canShareFurther`) — the explicit grant step the PIN flow never had. Deliberately reused as-is for
+both `PairConfirmRequest.permissions` and the persisted/returned shape on `Device`/`DeviceDto`
+(embedded field, hand-written accessors matching this class's existing no-Lombok convention) rather
+than split into a request/response pair like `RootRequest`/`StorageRootDto` — those two differ in
+shape (extra server-populated fields), but a request and response `SharingPermissionsDto` would be
+byte-for-byte identical, so splitting them would buy nothing. Dropped the originally-proposed
+"canAccessSharedStorage (always true)" field — a field that's always true carries no information, so
+it isn't modeled as a checkbox in the UI or a field in the schema; read access is just implicit.
+
+**Explicitly out of scope, flagged not fixed:** these permissions are stored on the device record
+only. `share-service`'s `ShareRequestService` does **not** read or enforce them — wiring real
+enforcement into an already-complete, separate service is a distinct piece of follow-up work, not
+silently rolled into a device-pairing refactor. Combined with the device/root-ownership gap flagged
+since Task 2 (still nothing confirms a `deviceId` belongs to the caller's `userId`), this is the
+natural next hardening pass on the sharing feature as a whole.
+
+**No new backend dependencies** — no ZXing, no commons-lang3 (both proposed in the original task
+brief). QR *image* generation moved entirely to the frontend; `UUID`/`SecureRandom` were already
+JDK-native. Keeps device-service's dependency footprint unchanged, the same "avoid new infra when
+avoidable" call Task 6 made choosing GridFS over MinIO/S3.
+
+**Frontend — first real (non-mock) device pairing in this app.** `DevicePairingModal.tsx` (100%
+client-side fabrication, never called the backend) is deleted outright, replaced by:
+- `QrPairingModal.tsx` — two modes, no manual-code fallback anywhere. **Generate** mode calls the
+  real `initiatePairing()` and renders the real `qrPayload` as an actual scannable QR via the new
+  `qrcode` dependency (canvas-rendered, live countdown off the real `expiresInSeconds`). **Scan**
+  mode uses the new `@yudiel/react-qr-scanner` dependency for a real camera feed + decode (resolved
+  clean against React 19; no fallback needed).
+- `DevicePermissionDialog.tsx` — shown after a QR is decoded, before the backend is ever called;
+  collects the joining device's profile (name/type/os/root) and the four granular permissions.
+  Decline never calls `confirmPairing()`; Accept does, and the resulting real `Device` — not a
+  fabricated one — flows back to `App.tsx`'s existing `handlePairSuccess`, unchanged.
+- `api-client.ts` gained `initiatePairing()`/`confirmPairing()`, using the same `request<T>()`
+  helper and error handling every Task 8 share function already uses — nothing new invented.
+- `types.ts`: `PairingSession.pairingCode` → `sessionId`; new `SharingPermissions` interface; `Device`
+  gained an optional `sharingPermissions` field (optional so the pre-existing mock devices in
+  `data/initialData.ts` don't need backfilling).
+- Cosmetic-only text fixes in `data/architectureDocs.ts` (§9 STRIDE bullet, §11 pairing-flow diagram,
+  §25 API matrix) and `data/initialData.ts` (one audit-log message, one STRIDE mitigation string) so
+  the narrative docs stop describing the now-deleted PIN flow as fact.
+
+**Safety step taken first:** this workspace had no git repository anywhere in its tree. Since this
+task deletes/rewrites files with zero VCS safety net, `git init` + an initial commit of the
+pre-refactor tree was done before touching anything, so the refactor is revertible.
+
+**Verified:** `mvn -pl common,device-service,transfer-service,share-service -am compile` and
+`test-compile` both clean (two pre-existing `DeviceDto` positional-record test fixtures in
+`transfer-service`/`share-service`'s integration tests updated for the new trailing
+`sharingPermissions` field). `npx tsc --noEmit` on `frontend/` clean; no leftover references to
+`DevicePairingModal` or `pairingCode` anywhere in `frontend/src`. **Not independently verified:** a
+full `mvn package` (the `spring-boot-maven-plugin:repackage` step) — this sandbox has a pre-existing
+Windows file-lock issue on the jar-rename step, reproducible even on `api-gateway` (untouched by this
+task) with ~20 stray `java.exe` processes already holding handles from prior runs; not something
+this change introduced, and not fixed here since killing unidentified processes on the user's machine
+is outside this task's scope. Re-run `mvn package` after closing those processes to confirm the
+repackage step itself.
+
+**Not done in Task 9 (left for later, or genuinely out of scope):** no enforcement of
+`sharingPermissions` in share-service (see above); no expiry/consumed cleanup job for
+`pairing_sessions` beyond the existing Mongo TTL index (unchanged from before this task); pairing
+still has no ownership check tying the confirming caller to the account that ran `pair/init` — the
+JWT-authenticated caller of `pair/init` and the JWT-authenticated caller of `pair/confirm` can be two
+different accounts today (same trust level the PIN flow had; not widened, not closed, by this
+refactor).

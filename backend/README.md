@@ -119,13 +119,17 @@ curl -s -X POST http://localhost:8080/api/v1/auth/register \
 
 export TOKEN="<accessToken from above>"
 
-# 2. Pair a device — step 1: get a pairing PIN + real EC keypair fingerprint
+# 2. Pair a device — step 1: get a QR-only pairing session + real EC keypair fingerprint
 curl -s -X POST http://localhost:8080/api/v1/devices/pair/init -H "Authorization: Bearer $TOKEN"
-# → { "pairingCode", "qrPayload", "expiresInSeconds", "deviceFingerprint", "ephemeralECDHKey" }
+# → { "sessionId", "qrPayload", "expiresInSeconds", "deviceFingerprint", "ephemeralECDHKey" }
+# qrPayload ("peervault://pair?session=<sessionId>&fp=<fingerprint>") is what actually gets rendered
+# as a scannable QR code and read back by the scanning device — sessionId is the pairing secret and
+# is never typed in by hand.
 
-# 2b. Confirm pairing with a name/type/os and at least one allowed root
+# 2b. Confirm pairing with the scanned sessionId, a name/type/os, at least one allowed root, and the
+# granular permissions granted in the scanning device's permission dialog
 curl -s -X POST http://localhost:8080/api/v1/devices/pair/confirm -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"pairingCode":"123456","name":"MacBook Pro 16\"","type":"laptop","os":"macOS","allowedRoots":[{"path":"/Users/harsh/Projects","label":"Dev","allowDelete":true}]}'
+  -d '{"sessionId":"<sessionId from step 2>","name":"MacBook Pro 16\"","type":"laptop","os":"macOS","allowedRoots":[{"path":"/Users/harsh/Projects","label":"Dev","allowDelete":true}],"permissions":{"canShareStorage":true,"canWrite":false,"canDelete":false,"canShareFurther":false}}'
 # → the created Device, with the new deviceId
 
 # 3. Register a file on that device

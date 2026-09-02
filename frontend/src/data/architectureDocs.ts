@@ -105,7 +105,7 @@ The **Personal Distributed Storage Network (PeerVault / DeviceMesh)** solves the
 
 1. **Spoofing (Device & Account):**
    - *Threat:* Rogue device attempts registration with cloned MAC/hostname.
-   - *Mitigation:* Asymmetric ECDSA P-256 / Ed25519 keypairs stored in OS Secure Enclave / TPM; ephemeral 120s pairing PIN + out-of-band QR verification.
+   - *Mitigation:* Asymmetric ECDSA P-256 / Ed25519 keypairs stored in OS Secure Enclave / TPM; ephemeral 120s pairing session, QR-only — no PIN, a real camera-scanned QR code is the sole attestation artifact.
 
 2. **Tampering (In-Transit Data):**
    - *Threat:* Man-in-the-Middle modifies file chunks during transfer.
@@ -143,11 +143,12 @@ The **Personal Distributed Storage Network (PeerVault / DeviceMesh)** solves the
         │ 2. POST /api/devices/pair    │                            │
         ├─────────────────────────────►│                            │
         │◄─────────────────────────────┤ 3. Return Session ID +     │
-        │    Display 6-Digit PIN + QR  │    120s TTL Ephemeral Key  │
+        │    Display Scannable QR      │    120s TTL Ephemeral Key  │
         │                              │                            │
-        │                              │ 4. Scan QR / Enter PIN     │
+        │                              │ 4. Scan QR (camera only —  │
+        │                              │    no manual code entry)   │
         │                              │◄───────────────────────────┤
-        │                              │ 5. Verify Biometric/Passkey│
+        │                              │ 5. Grant Permission Dialog │
         │                              │ 6. Select Allowed Roots    │
         │                              │    (/Projects, /Documents) │
         │ 7. Issue Device Certificate  │                            │
@@ -245,7 +246,7 @@ CREATE INDEX idx_audit_device ON audit_logs(device_id, timestamp);
 
 #### 1. REST Control Plane Endpoints
 - \`POST /api/v1/auth/passkey/verify\` — WebAuthn challenge & session JWT generation.
-- \`POST /api/v1/devices/pair/init\` — Generate ephemeral 6-digit PIN & ECDH challenge.
+- \`POST /api/v1/devices/pair/init\` — Generate ephemeral pairing session (QR-only) & ECDH challenge.
 - \`POST /api/v1/devices/pair/confirm\` — Out-of-band attestation and allowed root assignment.
 - \`POST /api/v1/devices/:id/freeze\` — Emergency freeze node (revokes all active sessions).
 - \`GET  /api/v1/devices/:id/files\` — Remote metadata query against authorized roots.

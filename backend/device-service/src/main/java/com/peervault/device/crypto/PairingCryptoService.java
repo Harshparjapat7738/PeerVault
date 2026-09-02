@@ -7,22 +7,22 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
 import java.security.spec.ECGenParameterSpec;
 import java.util.Base64;
 import java.util.HexFormat;
 
 /**
- * Real cryptographic pairing primitives — a genuine EC (P-256 / secp256r1) keypair, a SHA-256
- * fingerprint of the public key, and a SecureRandom 6-digit PIN. Not simulated strings.
+ * Real cryptographic pairing primitives — a genuine EC (P-256 / secp256r1) keypair and a SHA-256
+ * fingerprint of the public key. Not simulated strings.
+ *
+ * <p>QR-only pairing has no human-typed code, so this class no longer generates one (nor a
+ * {@code qrPayload} — that's built by the caller, since it needs the pairing session's id, which
+ * doesn't exist yet when this material is generated).
  */
 @Component
 public class PairingCryptoService {
 
-    private final SecureRandom secureRandom = new SecureRandom();
-
-    public record PairingMaterial(String pairingCode, String fingerprint, String ephemeralPublicKeyBase64,
-                                   String qrPayload) {
+    public record PairingMaterial(String fingerprint, String ephemeralPublicKeyBase64) {
     }
 
     public PairingMaterial generate() {
@@ -31,10 +31,8 @@ public class PairingCryptoService {
 
         String fingerprint = fingerprintOf(encodedPublicKey);
         String ephemeralPublicKeyBase64 = Base64.getEncoder().encodeToString(encodedPublicKey);
-        String pairingCode = generatePin();
-        String qrPayload = "peervault://pair?code=" + pairingCode + "&fp=" + fingerprint;
 
-        return new PairingMaterial(pairingCode, fingerprint, ephemeralPublicKeyBase64, qrPayload);
+        return new PairingMaterial(fingerprint, ephemeralPublicKeyBase64);
     }
 
     private KeyPair generateEcKeyPair() {
@@ -56,10 +54,5 @@ public class PairingCryptoService {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 is unavailable in this JVM", e);
         }
-    }
-
-    private String generatePin() {
-        int pin = 100000 + secureRandom.nextInt(900000);
-        return Integer.toString(pin);
     }
 }

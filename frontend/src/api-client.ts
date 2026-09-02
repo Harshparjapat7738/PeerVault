@@ -188,3 +188,18 @@ export function getRelayTransferStatus(transferId: string): Promise<RelayStatus>
 export function getRelayDownloadUrl(transferId: string): string {
   return `${API_BASE_URL}/api/v1/transfers/relay/${encodeURIComponent(transferId)}/download`;
 }
+
+// ─────────────────────────────── Device pairing (QR-only) ───────────────────────────────
+// The first real (non-mock) device pairing wired into this frontend — see QrPairingModal.tsx.
+// There is no manual-code fallback anywhere in this flow: sessionId only ever moves between these
+// two calls via a scanned QR code.
+
+import type { Device, PairingSession, PairingConfirm } from './types';
+
+export function initiatePairing(): Promise<PairingSession> {
+  return request('/api/v1/devices/pair/init', { method: 'POST' });
+}
+
+export function confirmPairing(body: PairingConfirm): Promise<Device> {
+  return request('/api/v1/devices/pair/confirm', { method: 'POST', body });
+}

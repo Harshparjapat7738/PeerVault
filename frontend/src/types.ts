@@ -13,6 +13,18 @@ export interface StorageRoot {
   totalSizeBytes: number;
 }
 
+/**
+ * Granted at QR-pairing confirm-time (see PairingSession / PairingConfirm). Read access to a
+ * device's own shared roots isn't a field here — it's implicit and always true, and a checkbox
+ * that's always checked isn't a real choice, so it isn't modeled as one.
+ */
+export interface SharingPermissions {
+  canShareStorage: boolean;
+  canWrite: boolean;
+  canDelete: boolean;
+  canShareFurther: boolean;
+}
+
 export interface Device {
   id: string;
   name: string;
@@ -35,6 +47,7 @@ export interface Device {
   isFavorite?: boolean;
   pairedAt: string;
   pinnedLocation?: string;
+  sharingPermissions?: SharingPermissions;
 }
 
 export interface StorageFile {
@@ -176,12 +189,24 @@ export interface ThreatItem {
   lastEvaluated: string;
 }
 
+/** QR-only pairing: sessionId is the pairing secret, carried solely inside qrPayload. There is no
+ * separate human-typed code — nothing to fall back to manual entry with. */
 export interface PairingSession {
-  pairingCode: string;
+  sessionId: string;
   qrPayload: string;
   expiresInSeconds: number;
   deviceFingerprint: string;
   ephemeralECDHKey: string;
+}
+
+/** Body for POST /api/v1/devices/pair/confirm. */
+export interface PairingConfirm {
+  sessionId: string;
+  name: string;
+  type: DeviceType;
+  os: OSType;
+  allowedRoots: Array<{ path: string; label: string; allowDelete: boolean }>;
+  permissions: SharingPermissions;
 }
 
 export type SharePermission = 'read' | 'write' | 'delete';

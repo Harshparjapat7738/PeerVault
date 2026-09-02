@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { DeviceGrid } from './components/DeviceGrid';
-import { DevicePairingModal } from './components/DevicePairingModal';
+import { QrPairingModal } from './components/QrPairingModal';
 import { FileExplorer } from './components/FileExplorer';
 import { FilePreviewModal } from './components/FilePreviewModal';
 import { DirectTransferModal } from './components/DirectTransferModal';
@@ -549,8 +549,8 @@ export default function App() {
 
       </main>
 
-      {/* Device Pairing Modal */}
-      <DevicePairingModal
+      {/* Device Pairing Modal (QR-only — see backend/CLAUDE.md Task 9) */}
+      <QrPairingModal
         isOpen={isPairingOpen}
         onClose={() => setIsPairingOpen(false)}
         onPairSuccess={handlePairSuccess}

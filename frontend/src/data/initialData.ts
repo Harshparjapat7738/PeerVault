@@ -476,7 +476,7 @@ export const INITIAL_AUDIT_LOGS: AuditEvent[] = [
     deviceName: 'Google Pixel 9 Pro',
     actor: 'User (harshparjapat7738@gmail.com)',
     action: 'Device Pairing Success',
-    details: 'Scanned 6-digit ephemeral PIN. Public key registered: SHA256:99f01e2d... Biometric WebAuthn attested.',
+    details: 'Scanned ephemeral pairing QR code. Public key registered: SHA256:99f01e2d... Permission dialog attested.',
     authorized: true,
     ipHash: 'sha256:11a0...99bb'
   }
@@ -490,7 +490,7 @@ export const STRIDE_THREAT_MATRIX: ThreatItem[] = [
     targetComponent: 'Device Registry & Agent Handshake',
     description: 'An attacker attempts to register a rogue device using a cloned identifier or hostname.',
     attackVector: 'Forged device metadata, MAC address spoofing, unauthorized API calls.',
-    mitigationRule: 'Enforce asymmetric ECDSA P-256 / Ed25519 device keypairs stored in OS Secure Enclave. Ephemeral 120s pairing PIN with out-of-band QR attestation.',
+    mitigationRule: 'Enforce asymmetric ECDSA P-256 / Ed25519 device keypairs stored in OS Secure Enclave. Ephemeral 120s pairing session, QR-only attestation with an explicit granted-permissions dialog.',
     status: 'mitigated',
     lastEvaluated: 'Continuous Real-time'
   },

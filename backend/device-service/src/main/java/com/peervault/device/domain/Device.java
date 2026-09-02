@@ -4,6 +4,7 @@ import com.peervault.common.dto.DeviceStatus;
 import com.peervault.common.dto.DeviceType;
 import com.peervault.common.dto.NatType;
 import com.peervault.common.dto.OsType;
+import com.peervault.common.dto.SharingPermissionsDto;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
@@ -48,6 +49,9 @@ public class Device {
 
     /** Who paired this device, e.g. "User (harshparjapat7738@gmail.com)" — audit detail text only. */
     private String ownerActor;
+
+    /** Granted at QR-pairing confirm-time. See {@link SharingPermissionsDto}'s javadoc for scope. */
+    private SharingPermissionsDto sharingPermissions;
 
     public Device() {
     }
@@ -232,6 +236,14 @@ public class Device {
         this.ownerActor = ownerActor;
     }
 
+    public SharingPermissionsDto getSharingPermissions() {
+        return sharingPermissions;
+    }
+
+    public void setSharingPermissions(SharingPermissionsDto sharingPermissions) {
+        this.sharingPermissions = sharingPermissions;
+    }
+
     public static final class Builder {
         private final Device device = new Device();
 
@@ -342,6 +354,11 @@ public class Device {
 
         public Builder ownerActor(String ownerActor) {
             device.ownerActor = ownerActor;
+            return this;
+        }
+
+        public Builder sharingPermissions(SharingPermissionsDto sharingPermissions) {
+            device.sharingPermissions = sharingPermissions;
             return this;
         }
 

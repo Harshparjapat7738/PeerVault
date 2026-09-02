@@ -7,10 +7,12 @@ import org.springframework.data.mongodb.core.mapping.Document;
 import java.time.Instant;
 
 /**
- * A short-lived pairing handshake: real EC (P-256) ephemeral keypair + 6-digit PIN. Mongo TTL-indexes
- * {@link #getExpiresAt()} so Atlas auto-deletes expired sessions, but TTL cleanup isn't instantaneous
- * (runs on a background sweep, up to ~60s late) so expiry is ALSO explicitly re-checked in code at
- * confirm-time.
+ * A short-lived pairing handshake: real EC (P-256) ephemeral keypair, identified solely by this
+ * session's own {@code id} (a UUID) — that id, embedded in the QR payload, IS the pairing secret.
+ * There is no separate human-typable code: QR-only, nothing to fall back to manual entry with.
+ * Mongo TTL-indexes {@link #getExpiresAt()} so Atlas auto-deletes expired sessions, but TTL cleanup
+ * isn't instantaneous (runs on a background sweep, up to ~60s late) so expiry is ALSO explicitly
+ * re-checked in code at confirm-time.
  *
  * <p>Hand-written (no Lombok): the JDK in this environment is newer than the Lombok version pinned by
  * the Spring Boot BOM supports, so its annotation processor silently produces no accessors.
@@ -20,7 +22,6 @@ public class PairingSession {
 
     @Id
     private String id;
-    private String pairingCode;
     private String deviceFingerprint;
     private String ephemeralPublicKeyBase64;
     private Instant createdAt;
@@ -43,14 +44,6 @@ public class PairingSession {
 
     public void setId(String id) {
         this.id = id;
-    }
-
-    public String getPairingCode() {
-        return pairingCode;
-    }
-
-    public void setPairingCode(String pairingCode) {
-        this.pairingCode = pairingCode;
     }
 
     public String getDeviceFingerprint() {
@@ -98,11 +91,6 @@ public class PairingSession {
 
         public Builder id(String id) {
             session.id = id;
-            return this;
-        }
-
-        public Builder pairingCode(String pairingCode) {
-            session.pairingCode = pairingCode;
             return this;
         }
 

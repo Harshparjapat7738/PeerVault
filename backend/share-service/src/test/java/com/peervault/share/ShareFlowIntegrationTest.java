@@ -201,7 +201,7 @@ class ShareFlowIntegrationTest {
         StorageRootDto root = new StorageRootDto(rootId, "/data/" + rootId, "Test Root", false, true, 0, 0);
         return new DeviceDto(deviceId, "Device " + deviceId, DeviceType.LAPTOP, OsType.LINUX, "1.0.0",
                 DeviceStatus.ONLINE, "fingerprint-" + deviceId, "10.0.0.1", NatType.FULL_CONE, "2026-01-01 00:00:00",
-                null, null, 0L, 0L, List.of(root), List.of(), 0, true, null, "2026-01-01 00:00:00", null);
+                null, null, 0L, 0L, List.of(root), List.of(), 0, true, null, "2026-01-01 00:00:00", null, null);
     }
 
     private HttpHeaders headersFor(String userId) {

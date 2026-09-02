@@ -24,6 +24,7 @@ public record DeviceDto(
         boolean directP2PCapable,
         Boolean isFavorite,
         String pairedAt,
-        String pinnedLocation
+        String pinnedLocation,
+        SharingPermissionsDto sharingPermissions
 ) {
 }

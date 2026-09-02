@@ -33,7 +33,8 @@ public class DeviceMapper {
                 device.isDirectP2PCapable(),
                 device.getIsFavorite(),
                 device.getPairedAt(),
-                device.getPinnedLocation()
+                device.getPinnedLocation(),
+                device.getSharingPermissions()
         );
     }
 

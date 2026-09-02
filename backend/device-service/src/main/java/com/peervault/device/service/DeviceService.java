@@ -61,10 +61,10 @@ public class DeviceService {
     public PairingSessionDto initPairing() {
         PairingCryptoService.PairingMaterial material = pairingCryptoService.generate();
         Instant now = Instant.now();
+        String sessionId = UUID.randomUUID().toString();
 
         PairingSession session = PairingSession.builder()
-                .id(UUID.randomUUID().toString())
-                .pairingCode(material.pairingCode())
+                .id(sessionId)
                 .deviceFingerprint(material.fingerprint())
                 .ephemeralPublicKeyBase64(material.ephemeralPublicKeyBase64())
                 .createdAt(now)
@@ -73,9 +73,13 @@ public class DeviceService {
                 .build();
         pairingSessionRepository.save(session);
 
+        // QR-only: sessionId is the one and only pairing secret, carried solely in this URI. No
+        // separate human-typed code exists to fall back to.
+        String qrPayload = "peervault://pair?session=" + sessionId + "&fp=" + material.fingerprint();
+
         return new PairingSessionDto(
-                material.pairingCode(),
-                material.qrPayload(),
+                sessionId,
+                qrPayload,
                 pairingTtlSeconds,
                 material.fingerprint(),
                 material.ephemeralPublicKeyBase64()
@@ -83,12 +87,16 @@ public class DeviceService {
     }
 
     public DeviceDto confirmPairing(PairConfirmRequest request, String remoteAddr, String ownerActor) {
-        PairingSession session = pairingSessionRepository.findByPairingCodeAndConsumedFalse(request.pairingCode())
+        PairingSession session = pairingSessionRepository.findById(request.sessionId())
                 .orElseThrow(() -> ApiException.notFound("PAIRING_SESSION_NOT_FOUND",
-                        "No active pairing session for code " + request.pairingCode()));
+                        "No pairing session for id " + request.sessionId()));
+
+        if (session.isConsumed()) {
+            throw ApiException.badRequest("PAIRING_ALREADY_CONSUMED", "This QR code has already been used. Please generate a new one.");
+        }
 
         if (Instant.now().isAfter(session.getExpiresAt())) {
-            throw ApiException.badRequest("PAIRING_EXPIRED", "Pairing code has expired. Please restart the handshake.");
+            throw ApiException.badRequest("PAIRING_EXPIRED", "This QR code has expired. Please generate a new one.");
         }
 
         session.setConsumed(true);
@@ -123,6 +131,7 @@ public class DeviceService {
                 .pairedAt(TimeFormats.today())
                 .pinnedLocation(null)
                 .ownerActor(ownerActor)
+                .sharingPermissions(request.permissions())
                 .build();
         deviceRepository.save(device);
 

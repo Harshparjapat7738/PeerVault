@@ -5,7 +5,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 /**
  * device-service: owns the device registry and the real EC (P-256) pairing crypto surface that
- * {@code DevicePairingModal.tsx} exercises. {@code scanBasePackages = "com.peervault"} so
+ * {@code QrPairingModal.tsx} exercises. {@code scanBasePackages = "com.peervault"} so
  * {@code com.peervault.common.exception.GlobalExceptionHandler} auto-registers alongside this
  * service's own components.
  */
