@@ -1,0 +1,38 @@
+# Shadows src/main/resources/application.yml on the test classpath (target/test-classes precedes
+# target/classes) so integration tests never try to reach Config Server/Eureka — everything they
+# need comes from @DynamicPropertySource-registered Testcontainers instead.
+spring:
+  application:
+    name: share-service
+  cloud:
+    config:
+      enabled: false
+    discovery:
+      enabled: false
+  data:
+    mongodb:
+      database: share_test
+      auto-index-creation: true
+  kafka:
+    consumer:
+      group-id: share-service-test
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.peervault.common.event,com.peervault.common.dto"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false
+
+peervault:
+  share:
+    request-ttl-hours: 72
+    rate-limit-count: 20
+    rate-limit-window-seconds: 3600

@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: file-service
+  config:
+    import: "configserver:${CONFIG_SERVER_URI:http://localhost:8888}"
+  cloud:
+    config:
+      # Config Server's composite backend includes a Vault entry, which requires every client request
+      # to carry an X-Config-Token header — Spring Cloud Config's client sends it automatically once
+      # this is set. Same dev token vault-init.sh/native seeding uses.
+      token: ${VAULT_TOKEN:peervault-dev-root-token}
+      fail-fast: true
+      retry:
+        max-attempts: 10
+        initial-interval: 2000
+        # Spring Retry's exponential backoff asserts max > initial; left unset this defaults to 2000,
+        # equal to initial-interval above, and fails fast at boot with "Max interval should be > than
+        # initial interval" before ever attempting a retry.
+        max-interval: 6000

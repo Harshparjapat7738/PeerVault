@@ -1,0 +1,23 @@
+server:
+  port: 8084
+
+spring:
+  data:
+    mongodb:
+      database: transfer_db
+  servlet:
+    multipart:
+      # Spring Boot's defaults (1MB file / 10MB request) would silently reject most real uploads to
+      # POST /api/v1/transfers/relay/upload (Task 6) — raised well past chunk-size-bytes below.
+      max-file-size: 512MB
+      max-request-size: 512MB
+
+peervault:
+  transfer:
+    tick-interval-ms: 800
+    chunk-size-bytes: 262144
+    default-p2p-speed-bytes-per-sec: 44040192   # ~42 MB/s
+    default-relay-speed-bytes-per-sec: 18874368  # ~18 MB/s
+    relay:
+      # Relay-mode blobs (Task 6) auto-purge from GridFS this many days after upload.
+      ttl-days: 7

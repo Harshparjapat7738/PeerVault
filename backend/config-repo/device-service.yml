@@ -1,0 +1,11 @@
+server:
+  port: 8082
+
+spring:
+  data:
+    mongodb:
+      database: device_db
+
+peervault:
+  pairing:
+    ttl-seconds: 120

@@ -1,0 +1,7 @@
+server:
+  port: 8085
+
+spring:
+  data:
+    mongodb:
+      database: security_db

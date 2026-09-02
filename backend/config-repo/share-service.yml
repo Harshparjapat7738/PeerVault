@@ -1,0 +1,16 @@
+server:
+  port: 8087
+
+spring:
+  data:
+    mongodb:
+      database: share_db
+
+peervault:
+  share:
+    # Default TTL a ShareRequest gets when the caller doesn't set an explicit expiresAt.
+    request-ttl-hours: 72
+    # POST /api/v1/share/request throttle: rate-limit-count requests per rate-limit-window-seconds,
+    # keyed per requester (Redis key share:requests:{userId}:hourly).
+    rate-limit-count: 20
+    rate-limit-window-seconds: 3600

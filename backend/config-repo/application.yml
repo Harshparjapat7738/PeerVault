@@ -1,0 +1,70 @@
+# Global defaults layered under every service's own {service-name}.yml (native backend, lowest priority
+# after Vault secrets). Anything here can be overridden per-service.
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URI:http://eureka-server:8761/eureka/}
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:kafka:9092}
+    consumer:
+      group-id: ${spring.application.name}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.peervault.common.event,com.peervault.common.dto"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # add.type.headers stays at its default (true): every event class lives in `common`, which is on
+      # every service's classpath, so the __TypeId__ header lets JsonDeserializer reconstruct the exact
+      # record type (DomainEvent / TransferProgressEvent / DeviceFreezeCommand / AuditEventDto) with zero
+      # per-listener default-type wiring.
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+    mongodb:
+      # Full Atlas SRV connection string, sourced from backend/.env (MONGODB_URI) — never hardcoded here
+      # or in Vault. Each service overrides `database` in its own {service-name}.yml to pick its own
+      # logical database within the one Atlas cluster (data ownership without separate clusters).
+      uri: ${MONGODB_URI}
+      auto-index-creation: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+  health:
+    redis:
+      enabled: true
+
+jwt:
+  access-ttl-seconds: 900
+  refresh-ttl-seconds: 604800
+
+peervault:
+  frontend-origin: ${FRONTEND_ORIGIN:http://localhost:3000}
+  security:
+    delete-rate-limit-count: 20
+    delete-rate-limit-window-seconds: 60
+  trash:
+    retention-days: 30
+
+logging:
+  level:
+    com.peervault: INFO
+    org.springframework.cloud: WARN

@@ -1,0 +1,6 @@
+**/target
+**/.idea
+**/*.iml
+**/.mvn/wrapper
+.git
+*.md

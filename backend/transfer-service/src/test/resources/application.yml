@@ -1,0 +1,44 @@
+# Shadows src/main/resources/application.yml on the test classpath — see share-service's copy of
+# this file for why (Config Server/Eureka are never reachable in a Testcontainers-only test run).
+spring:
+  application:
+    name: transfer-service
+  cloud:
+    config:
+      enabled: false
+    discovery:
+      enabled: false
+  data:
+    mongodb:
+      database: transfer_test
+      auto-index-creation: true
+  kafka:
+    consumer:
+      group-id: transfer-service-test
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.peervault.common.event,com.peervault.common.dto"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+  servlet:
+    multipart:
+      max-file-size: 512MB
+      max-request-size: 512MB
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false
+
+peervault:
+  transfer:
+    tick-interval-ms: 800
+    chunk-size-bytes: 262144
+    default-p2p-speed-bytes-per-sec: 44040192
+    default-relay-speed-bytes-per-sec: 18874368
+    relay:
+      ttl-days: 7
