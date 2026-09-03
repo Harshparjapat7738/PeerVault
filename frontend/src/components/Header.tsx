@@ -1,20 +1,22 @@
 import React from 'react';
-import { 
-  ShieldCheck, 
-  HardDrive, 
-  Wifi, 
-  Lock, 
-  Terminal, 
-  FolderTree, 
-  ArrowLeftRight, 
-  BookOpen, 
+import {
+  ShieldCheck,
+  HardDrive,
+  Wifi,
+  Lock,
+  Terminal,
+  FolderTree,
+  ArrowLeftRight,
+  BookOpen,
   Bell,
   CheckCircle2,
   Server,
   Plus,
-  Share2
+  Share2,
+  LogOut
 } from 'lucide-react';
 import { Device, TransferTask } from '../types';
+import type { StoredUser } from '../api/client';
 
 interface HeaderProps {
   activeTab: string;
@@ -24,6 +26,11 @@ interface HeaderProps {
   onOpenPairing: () => void;
   unreadAlertsCount: number;
   onOpenAlerts: () => void;
+  /** Signed-in account (from `../api/client.ts`'s `getStoredUser()`) — null if somehow rendered
+   *  without a session (shouldn't happen: `App.tsx`'s route guard sends unauthenticated users to
+   *  `/login` before this ever mounts), in which case a generic placeholder is shown instead. */
+  currentUser?: StoredUser | null;
+  onLogout?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -33,13 +40,23 @@ export const Header: React.FC<HeaderProps> = ({
   transfers,
   onOpenPairing,
   unreadAlertsCount,
-  onOpenAlerts
+  onOpenAlerts,
+  currentUser,
+  onLogout
 }) => {
   const onlineDevicesCount = devices.filter(d => d.status === 'online').length;
   const activeTransfersCount = transfers.filter(t => t.status === 'transferring').length;
   const totalStorageBytes = devices.reduce((acc, d) => acc + d.storageTotalBytes, 0);
   const usedStorageBytes = devices.reduce((acc, d) => acc + d.storageUsedBytes, 0);
   const usedStorageTB = (usedStorageBytes / (1024 * 1024 * 1024 * 1024)).toFixed(1);
+
+  const accountLabel = currentUser?.name || currentUser?.email?.split('@')[0] || 'Guest';
+  const accountInitials = accountLabel
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0]?.toUpperCase())
+    .join('') || '?';
   const totalStorageTB = (totalStorageBytes / (1024 * 1024 * 1024 * 1024)).toFixed(1);
 
   const navItems = [
@@ -149,12 +166,21 @@ export const Header: React.FC<HeaderProps> = ({
             {/* User Account Info */}
             <div className="flex items-center space-x-2.5 border-l border-[#1A1A1A]/15 pl-3">
               <div className="w-8 h-8 bg-[#1A1A1A] text-[#F9F8F6] border border-[#1A1A1A] flex items-center justify-center font-mono text-xs font-bold">
-                HP
+                {accountInitials}
               </div>
               <div className="hidden xl:block text-left text-xs">
-                <div className="font-semibold text-[#1A1A1A] truncate max-w-[130px] font-mono text-[11px]">harshparjapat</div>
-                <div className="text-[10px] text-[#5A5955] uppercase tracking-wider">Passkey WebAuthn</div>
+                <div className="font-semibold text-[#1A1A1A] truncate max-w-[130px] font-mono text-[11px]">{accountLabel}</div>
+                <div className="text-[10px] text-[#5A5955] uppercase tracking-wider">{currentUser?.email || 'Not signed in'}</div>
               </div>
+              {onLogout && (
+                <button
+                  onClick={onLogout}
+                  title="Log out"
+                  className="p-1.5 text-[#76746E] hover:text-[#1A1A1A] hover:bg-[#F4F2EE] transition-colors cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
 
           </div>

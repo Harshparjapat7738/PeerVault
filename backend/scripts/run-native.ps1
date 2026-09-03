@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
   Runs the entire PeerVault backend (Mongo, Redis, Kafka, Vault, Eureka, Config Server, API Gateway,
-  and all 6 business services) as native Windows processes - no Docker.
+  and all 7 business services, share-service included) as native Windows processes - no Docker.
 
 .DESCRIPTION
   This is the no-Docker counterpart to `docker compose up`. Infra binaries (MongoDB, Redis, Kafka,
@@ -51,6 +51,20 @@ function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg) { Write-Host "    OK: $msg" -ForegroundColor Green }
 function Write-Info($msg) { Write-Host "    $msg" -ForegroundColor DarkGray }
 
+# Reads KEY=VALUE pairs from backend/.env (same file `docker compose` reads) so native mode is
+# driven by the same real config instead of the hardcoded localhost defaults below. Blank/missing
+# file just yields an empty table - every lookup against it then falls through to those defaults.
+function Get-DotEnv([string]$Path) {
+    $table = @{}
+    if (-not (Test-Path $Path)) { return $table }
+    foreach ($line in Get-Content $Path) {
+        if ($line -match '^\s*#' -or $line -notmatch '=') { continue }
+        $key, $value = $line -split '=', 2
+        $table[$key.Trim()] = $value.Trim()
+    }
+    return $table
+}
+
 function Test-Port([int]$Port, [string]$TargetHost = '127.0.0.1') {
     try {
         $client = New-Object System.Net.Sockets.TcpClient
@@ -86,9 +100,80 @@ function Wait-LogPattern([string]$LogFile, [string]$Pattern, [string]$Name, [int
     throw "$Name did not start within $TimeoutSec s - check $LogFile"
 }
 
+# Self-healing cleanup for a very real failure mode: if a previous run of this script never went
+# through stop-native.ps1 (Ctrl+C, a closed terminal, or the run itself throwing partway through -
+# e.g. exactly the "Cannot remove item ...eureka-server.log ... being used by another process" crash
+# this function exists to prevent), its java.exe processes are still alive and orphaned. Left alone
+# they (a) keep old log files open, so Start-Tracked's own Remove-Item on the same filename fails
+# outright, and (b) keep old ports bound, so Wait-Port/Wait-LogPattern below end up watching the OLD
+# process's output instead of the new one this run just started. This has been observed to compound
+# across repeated runs - TWO full stale generations of every service (including two Kafka brokers
+# racing for the same port) were found running simultaneously with an empty PID ledger (so
+# stop-native.ps1 had nothing to go on) after a couple of interrupted runs.
+#
+# Deliberately NOT ledger-based (the ledger is exactly what's unreliable in this scenario - it gets
+# reset by the very next run, and an even-older orphan may predate it entirely). Instead this matches
+# live java.exe processes by the literal jar filename on their command line - precise enough to never
+# touch an unrelated java process elsewhere on the machine, and it catches every orphan regardless of
+# which run started it or whether the ledger remembers it.
+#
+# Kafka gets different treatment than the rest: eureka-server/config-server/the business services/
+# the gateway are *always* killed-and-restarted fresh by this script on every single invocation (no
+# Test-Port guard for them, by deliberate design - "re-run to pick up new code"), so a live copy from
+# a previous run is unconditionally stale and safe to kill here. Kafka is infra, like mongod/redis/
+# vault - a single healthy instance is meant to keep running across invocations (see the Test-Port
+# 9092 check below), so it's only touched here if there's a genuine *duplicate* (>1 kafka.Kafka
+# process) - the actual bug this function exists for, not the normal "one instance, left alone" case.
+function Stop-OrphanedJavaServices {
+    $alwaysRestartJars = @(
+        'eureka-server.jar', 'config-server.jar', 'api-gateway.jar', 'auth-service.jar', 'device-service.jar',
+        'file-service.jar', 'transfer-service.jar', 'security-service.jar', 'notification-service.jar',
+        'share-service.jar'
+    )
+    $allJava = Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue
+    $toKill = @($allJava | Where-Object { $cmd = $_.CommandLine; $cmd -and ($alwaysRestartJars | Where-Object { $cmd -like "*$_*" }) })
+
+    $kafkaProcs = @($allJava | Where-Object { $_.CommandLine -like '*kafka.Kafka*' })
+    if ($kafkaProcs.Count -gt 1) { $toKill += $kafkaProcs }
+
+    if (-not $toKill) { return }
+    Write-Step 'Stopping PeerVault Java processes left running from a previous run'
+    foreach ($p in $toKill) {
+        # Every java.exe launched via the bare `java` command on this machine actually starts as a
+        # parent/child pair (a "javapath" launcher stub that re-execs the real JDK's java.exe as a
+        # child) - both ends independently match $toKill's jar-name filter above. `/T` below already
+        # tree-kills the child along with its parent, so by the time this loop reaches the child's
+        # own entry it may already be gone - `Get-Process` skips the now-redundant taskkill call for
+        # it, and the try/catch is a second line of defense for the same race (also covers a process
+        # that exits on its own between the filter above and this line). Without both, a "process not
+        # found" from taskkill here would otherwise crash the whole script: PowerShell 5.1 promotes a
+        # redirected native-command stderr line into a terminating error under this script's own
+        # $ErrorActionPreference = 'Stop' - this was hit for real, not just theorized.
+        if (-not (Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue)) { continue }
+        try {
+            taskkill /PID $p.ProcessId /T /F 2>&1 | Out-Null
+        } catch {
+            continue
+        }
+        Write-Info "Stopped orphaned java.exe (pid $($p.ProcessId))"
+    }
+    Start-Sleep -Seconds 2  # give Windows a moment to actually release the file handles/ports
+}
+
 function Start-Tracked([string]$Name, [string]$FilePath, [string[]]$ArgumentList, [hashtable]$Env = @{}, [string]$WorkingDirectory = $null) {
     $logFile = Join-Path $Logs "$Name.log"
-    if (Test-Path $logFile) { Remove-Item $logFile -Force }
+    if (Test-Path $logFile) {
+        try {
+            Remove-Item $logFile -Force -ErrorAction Stop
+        } catch {
+            # Belt-and-suspenders: Stop-OrphanedJavaServices below should already have killed
+            # whatever previously held this file open, so this is normally a no-op. If something
+            # outside this script's own tracking still has it open (a log viewer, a process that
+            # somehow survived taskkill), don't let that hard-crash the whole run over one log file
+            # - RedirectStandardOutput just needs a writable path, not this exact handle gone first.
+            Write-Host "    WARN: could not remove old $logFile ($($_.Exception.Message)) - leaving it, new output will append" -ForegroundColor Yellow
+        }
+    }
     foreach ($key in $Env.Keys) { Set-Item -Path "env:$key" -Value $Env[$key] }
     # Start-Process's ArgumentList does NOT auto-quote elements containing spaces (this repo's path
     # does: "New folder (2)") -- each element needs its own embedded quotes or the process sees it
@@ -112,7 +197,13 @@ function Start-Tracked([string]$Name, [string]$FilePath, [string[]]$ArgumentList
 # -- layout ---------------------------------------------------------------------------------------
 
 New-Item -ItemType Directory -Force -Path $Native, $Logs, "$Native\pids", "$Native\data\mongo", "$Native\data\kafka" | Out-Null
+
+Stop-OrphanedJavaServices
+
 if (-not $SkipInfra) { '' | Set-Content -Path $PidsFile }  # fresh PID ledger unless we're layering onto a running infra
+
+$DotEnv = Get-DotEnv (Join-Path $Backend '.env')
+if ($DotEnv.Count -gt 0) { Write-Info "Loaded backend\.env ($($DotEnv.Keys -join ', '))" }
 
 $MongoDir = Join-Path $Native 'mongodb'
 $RedisDir = Join-Path $Native 'redis'
@@ -233,7 +324,10 @@ if (-not $SkipInfra) {
     Write-Step 'Seeding Vault JWT secret (idempotent)'
     $env:VAULT_ADDR = 'http://127.0.0.1:8200'
     $env:VAULT_TOKEN = 'peervault-dev-root-token'
-    & "$VaultDir\vault.exe" kv put secret/application jwt.secret="cGVlcnZhdWx0LWRldi1zdXBlci1zZWNyZXQtc2lnbmluZy1rZXktcGxlYXNlLXJvdGF0ZS0zMmI=" | Out-Null
+    # Same optional-override behavior docker/vault-init.sh documents for JWT_SECRET: use .env's
+    # value if set, otherwise fall back to this baked-in dev default.
+    $jwtSecret = if ($DotEnv.JWT_SECRET) { $DotEnv.JWT_SECRET } else { 'cGVlcnZhdWx0LWRldi1zdXBlci1zZWNyZXQtc2lnbmluZy1rZXktcGxlYXNlLXJvdGF0ZS0zMmI=' }
+    & "$VaultDir\vault.exe" kv put secret/application jwt.secret="$jwtSecret" | Out-Null
     Remove-Item Env:\VAULT_ADDR, Env:\VAULT_TOKEN -ErrorAction SilentlyContinue
     Write-Ok 'Vault seeded'
 }
@@ -242,7 +336,7 @@ if (-not $SkipInfra) {
 
 $needBuild = $Build.IsPresent
 if (-not $needBuild) {
-    foreach ($m in 'eureka-server', 'config-server', 'api-gateway', 'auth-service', 'device-service', 'file-service', 'transfer-service', 'security-service', 'notification-service') {
+    foreach ($m in 'eureka-server', 'config-server', 'api-gateway', 'auth-service', 'device-service', 'file-service', 'transfer-service', 'security-service', 'notification-service', 'share-service') {
         if (-not (Test-Path "$Backend\$m\target\$m.jar")) { $needBuild = $true }
     }
 }
@@ -277,15 +371,23 @@ $commonEnv = @{
     KAFKA_BOOTSTRAP  = 'localhost:9092'
     REDIS_HOST       = 'localhost'
     REDIS_PORT       = '6379'
-    MONGODB_URI      = 'mongodb://localhost:27017'
-    FRONTEND_ORIGIN  = 'http://localhost:3000'
+    # backend\.env's MONGODB_URI wins when set (e.g. a real Atlas URI) - same override docker
+    # compose gives it - otherwise the bundled local mongod started above.
+    MONGODB_URI      = if ($DotEnv.MONGODB_URI) { $DotEnv.MONGODB_URI } else { 'mongodb://localhost:27017' }
+    # Same override pattern as MONGODB_URI above. Needed for cross-device testing (e.g. QR pairing
+    # scanned from a phone on the same Wi-Fi): the gateway's CORS check compares this against the
+    # browser's actual Origin header, so a frontend loaded from a LAN IP - not "localhost" - needs
+    # this set to that same "http://<LAN-IP>:3000" in backend\.env, or every request from that
+    # device gets rejected by CORS before it ever reaches a service. See frontend/README.md's
+    # "Cross-device / LAN setup" section.
+    FRONTEND_ORIGIN  = if ($DotEnv.FRONTEND_ORIGIN) { $DotEnv.FRONTEND_ORIGIN } else { 'http://localhost:3000' }
 }
 
-Write-Step 'Starting business services (auth, device, file, transfer, security, notification)'
-foreach ($svc in 'auth-service', 'device-service', 'file-service', 'transfer-service', 'security-service', 'notification-service') {
+Write-Step 'Starting business services (auth, device, file, transfer, security, notification, share)'
+foreach ($svc in 'auth-service', 'device-service', 'file-service', 'transfer-service', 'security-service', 'notification-service', 'share-service') {
     Start-Tracked -Name $svc -FilePath 'java' -ArgumentList @('-jar', "$Backend\$svc\target\$svc.jar") -Env $commonEnv | Out-Null
 }
-foreach ($svc in 'auth-service', 'device-service', 'file-service', 'transfer-service', 'security-service', 'notification-service') {
+foreach ($svc in 'auth-service', 'device-service', 'file-service', 'transfer-service', 'security-service', 'notification-service', 'share-service') {
     $pascal = ($svc -split '-' | ForEach-Object { $_.Substring(0,1).ToUpper() + $_.Substring(1) }) -join ''
     Wait-LogPattern -LogFile "$Logs\$svc.log" -Pattern "Started ${pascal}Application" -Name $svc -TimeoutSec 90
 }

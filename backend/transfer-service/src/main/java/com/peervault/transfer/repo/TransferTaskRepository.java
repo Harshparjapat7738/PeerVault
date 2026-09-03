@@ -10,4 +10,7 @@ public interface TransferTaskRepository extends MongoRepository<TransferTask, St
 
     /** Backs RelayCleanupScheduler's TTL sweep: relay blobs still on disk past their deadline. */
     List<TransferTask> findByRelayFileIdNotNullAndRelayExpiresAtBefore(Instant instant);
+
+    /** Backs the tenant-scoped transfer listing. */
+    List<TransferTask> findByInitiatedByUserId(String userId);
 }

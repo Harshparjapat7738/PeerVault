@@ -8,42 +8,25 @@
  * Talks to the api-gateway (`VITE_API_BASE_URL`, default `http://localhost:8080`) exactly the way
  * `backend/README.md`'s curl walkthrough does — same paths, same `Authorization: Bearer` + JSON.
  *
- * Auth: there is no login screen anywhere in this frontend yet (`Header.tsx` shows a hardcoded
- * "harshparjapat" identity) and building one is its own task, not part of Task 8's explicit list —
- * `getAuthToken()` is a thin, clearly-marked stub reading a token a developer can drop into
- * `localStorage` by hand (e.g. from the backend README's curl walkthrough) for now.
+ * Auth: request/token handling now lives in `./api/client.ts` (`apiFetch`) — every function below
+ * is a thin wrapper over it, so it gets the same auto-attached bearer token and auto-redirect-to-
+ * `/login` on 401 that `./pages/LoginPage.tsx` relies on. `getAuthToken`/`setAuthToken` are kept
+ * here only so existing imports (`stomp-client.ts`, `QrPairingModal.tsx`) don't need to change.
  */
+import { apiFetch, getToken, setSession, ApiError, isAuthError, API_BASE_URL } from './api/client';
 
-const API_BASE_URL: string = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8080';
-const AUTH_TOKEN_STORAGE_KEY = 'peervault_token';
+export { ApiError, isAuthError };
 
-/** Stand-in until a real login flow exists — see this file's header comment. */
+/** @deprecated use `getToken` from `./api/client` directly in new code. */
 export function getAuthToken(): string | null {
-  try {
-    return localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
-  } catch {
-    return null;
-  }
+  return getToken();
 }
 
+/** @deprecated the old dev-token stub's signature (access token only, no refresh token/user) —
+ *  real sign-in goes through `./pages/LoginPage.tsx` + `./api/authApi.ts`, which call
+ *  `./api/client.ts`'s `setSession()` with the full session instead. */
 export function setAuthToken(token: string): void {
-  try {
-    localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
-  } catch {
-    // localStorage can throw in a private-browsing/blocked-storage context — nothing meaningful to
-    // recover here, the caller just won't have a persisted token for next time.
-  }
-}
-
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number,
-    public readonly errorCode?: string
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
+  setSession({ accessToken: token });
 }
 
 interface RequestOptions {
@@ -53,34 +36,8 @@ interface RequestOptions {
   raw?: boolean;
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const token = getAuthToken();
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  if (!options.raw && options.body !== undefined) headers['Content-Type'] = 'application/json';
-
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: options.method || 'GET',
-    headers,
-    body: options.raw ? (options.body as BodyInit) : options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
-
-  if (!response.ok) {
-    // Matches ErrorResponse's shape from com.peervault.common.exception.GlobalExceptionHandler.
-    let message = `Request failed (${response.status})`;
-    let errorCode: string | undefined;
-    try {
-      const body = await response.json();
-      message = body.message || message;
-      errorCode = body.errorCode;
-    } catch {
-      // Non-JSON error body (e.g. the gateway itself rejecting the request) — keep the generic message.
-    }
-    throw new ApiError(message, response.status, errorCode);
-  }
-
-  if (response.status === 204) return undefined as T;
-  return response.json();
+function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  return apiFetch<T>(path, options);
 }
 
 // ─────────────────────────────── Share requests (Task 2/3) ───────────────────────────────

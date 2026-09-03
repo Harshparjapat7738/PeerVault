@@ -70,10 +70,21 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
         }
 
         String authHeader = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        String token;
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            token = authHeader.substring("Bearer ".length());
+        } else if (path.startsWith("/ws")) {
+            // Browsers can't attach an Authorization header to a WebSocket upgrade request (the
+            // SockJS "websocket" transport is a native WebSocket under the hood), so the STOMP
+            // client falls back to passing the JWT as a query param for this prefix only — every
+            // other route still requires the real header.
+            token = request.getQueryParams().getFirst("access_token");
+        } else {
+            token = null;
+        }
+        if (token == null || token.isBlank()) {
             return unauthorized(exchange, "MISSING_TOKEN", "Authorization header is required");
         }
-        String token = authHeader.substring("Bearer ".length());
 
         Claims claims;
         try {

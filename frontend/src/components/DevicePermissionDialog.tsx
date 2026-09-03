@@ -3,6 +3,10 @@ import { Laptop, Server, Monitor, Smartphone, ShieldCheck, AlertCircle, ArrowRig
 import { DeviceType, OSType, SharingPermissions } from '../types';
 
 interface DevicePermissionDialogProps {
+  /** The pairing session id read off the scanned QR (or typed into the manual-entry fallback) —
+   *  shown, shortened, so the person confirming can visually cross-check it against the session id
+   *  on the generating device's screen before granting anything. */
+  sessionId: string;
   /** SHA-256 fingerprint of the pairing session's ephemeral key, read off the scanned QR — shown so
    *  the person confirming can visually cross-check it against the generating device's screen. */
   deviceFingerprint: string;
@@ -12,11 +16,18 @@ interface DevicePermissionDialogProps {
   error: string | null;
 }
 
+/** Shortens a long id/hash for display — first 8 + last 6 chars, matching how git/etc. abbreviate
+ *  hashes — while the full value stays available via the element's `title` tooltip. */
+function shorten(value: string): string {
+  return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
+}
+
 /**
  * Shown once a QR has been scanned and decoded, before `confirmPairing()` is ever called — this is
  * the explicit permission grant the PIN-based flow never had. Declining never touches the backend.
  */
 export const DevicePermissionDialog: React.FC<DevicePermissionDialogProps> = ({
+  sessionId,
   deviceFingerprint,
   onAccept,
   onDecline,
@@ -50,9 +61,9 @@ export const DevicePermissionDialog: React.FC<DevicePermissionDialogProps> = ({
             <ShieldCheck className="w-5 h-5 text-emerald-800" />
           </div>
           <div>
-            <h3 className="font-serif font-bold text-[#1A1A1A] text-lg">Confirm This Device</h3>
+            <h3 className="font-serif font-bold text-[#1A1A1A] text-lg">Pair With Device {shorten(sessionId)}?</h3>
             <p className="text-xs font-mono text-[#76746E] truncate max-w-[320px]" title={deviceFingerprint}>
-              {deviceFingerprint}
+              Fingerprint: {shorten(deviceFingerprint)}
             </p>
           </div>
         </div>

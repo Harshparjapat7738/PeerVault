@@ -47,7 +47,12 @@ management:
         include: health,info
   endpoint:
     health:
-      show-details: always
+      # "never", not "always": /actuator/** is on JwtAuthGlobalFilter's PUBLIC_PREFIXES allow-list
+      # (container orchestrators need it reachable with no token), so with the gateway's public port
+      # exposed to the internet, per-indicator health details (Mongo/Redis/Kafka connectivity,
+      # component-level status) would otherwise be visible to anyone, unauthenticated. The aggregate
+      # UP/DOWN status itself is unaffected — only the breakdown is hidden.
+      show-details: never
   health:
     redis:
       enabled: true

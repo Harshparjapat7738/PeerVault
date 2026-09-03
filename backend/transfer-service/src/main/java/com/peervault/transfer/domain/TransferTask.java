@@ -50,6 +50,16 @@ public class TransferTask {
     private String completedAt;
     private String errorReason;
 
+    /**
+     * The {@code X-User-Id} of whoever created this transfer via {@code startDownload}/
+     * {@code startDirectTransfer} — internal-only, never exposed on {@code TransferTaskDto}/the
+     * frontend, same treatment as {@link #relayFileId}. Backs tenant-scoped listing and mutation
+     * (pause/cancel/glitch) so one user can't manipulate another's transfer by guessing its id. Null
+     * for tasks created before this field existed, or by a caller with no {@code X-User-Id} (an
+     * internal service-to-service call — none exists for these two endpoints today).
+     */
+    private String initiatedByUserId;
+
     // --- Relay mode (Task 6) — internal-only, never exposed on TransferTaskDto/the frontend, same
     // treatment as Device.ownerActor: relayFileId is a raw GridFS ObjectId, meaningless off-server. ---
 

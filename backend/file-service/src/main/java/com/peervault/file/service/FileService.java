@@ -3,10 +3,12 @@ package com.peervault.file.service;
 import com.peervault.common.constant.KafkaTopics;
 import com.peervault.common.dto.AuditEventType;
 import com.peervault.common.dto.AuditSeverity;
+import com.peervault.common.dto.DeviceDto;
 import com.peervault.common.dto.StorageFileDto;
 import com.peervault.common.dto.UploadFileRequestDto;
 import com.peervault.common.event.DomainEvent;
 import com.peervault.common.exception.ApiException;
+import com.peervault.file.client.DeviceClient;
 import com.peervault.file.domain.FilePermissions;
 import com.peervault.file.domain.StorageFile;
 import com.peervault.file.mapper.FileMapper;
@@ -46,22 +48,37 @@ public class FileService {
     private final StorageFileRepository repository;
     private final MongoTemplate mongoTemplate;
     private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final DeviceClient deviceClient;
 
     @Value("${peervault.trash.retention-days:30}")
     private int trashRetentionDays;
 
     public FileService(StorageFileRepository repository, MongoTemplate mongoTemplate,
-                        KafkaTemplate<String, Object> kafkaTemplate) {
+                        KafkaTemplate<String, Object> kafkaTemplate, DeviceClient deviceClient) {
         this.repository = repository;
         this.mongoTemplate = mongoTemplate;
         this.kafkaTemplate = kafkaTemplate;
+        this.deviceClient = deviceClient;
     }
 
-    public List<StorageFileDto> list(String deviceId, String rootId, String search, String type) {
+    /**
+     * Tenant isolation, gated on {@code userId} being present: a real browser request through the
+     * gateway always carries {@code X-User-Id}, so it's enforced there; internal Eureka-to-Eureka
+     * calls (share-service's {@code FileClient}, which is the deliberate "sole gate" for shared-storage
+     * access per Task 4) carry no such header and stay unaffected — see backend/CLAUDE.md.
+     */
+    public List<StorageFileDto> list(String deviceId, String rootId, String search, String type, String userId) {
         Query query = new Query(Criteria.where("inTrash").ne(true));
 
         if (deviceId != null && !deviceId.isBlank() && !"all".equalsIgnoreCase(deviceId)) {
+            requireOwnedDevice(deviceId, userId);
             query.addCriteria(Criteria.where("deviceId").is(deviceId));
+        } else if (userId != null && !userId.isBlank()) {
+            List<String> ownedDeviceIds = deviceClient.listDeviceIdsForUser(userId);
+            if (ownedDeviceIds.isEmpty()) {
+                return List.of();
+            }
+            query.addCriteria(Criteria.where("deviceId").in(ownedDeviceIds));
         }
 
         // Scopes to one storage root within a device — share-service relies on this to list only
@@ -102,17 +119,29 @@ public class FileService {
         };
     }
 
-    public List<StorageFileDto> listTrash() {
+    public List<StorageFileDto> listTrash(String userId) {
+        if (userId != null && !userId.isBlank()) {
+            List<String> ownedDeviceIds = deviceClient.listDeviceIdsForUser(userId);
+            if (ownedDeviceIds.isEmpty()) {
+                return List.of();
+            }
+            return repository.findByInTrashAndDeviceIdIn(true, ownedDeviceIds).stream()
+                    .map(FileMapper::toDto)
+                    .toList();
+        }
         return repository.findByInTrash(true).stream()
                 .map(FileMapper::toDto)
                 .toList();
     }
 
-    public StorageFileDto getById(String id) {
-        return FileMapper.toDto(findOrThrow(id));
+    public StorageFileDto getById(String id, String userId) {
+        StorageFile file = findOrThrow(id);
+        requireOwnedDevice(file.getDeviceId(), userId);
+        return FileMapper.toDto(file);
     }
 
-    public StorageFileDto upload(UploadFileRequestDto req) {
+    public StorageFileDto upload(UploadFileRequestDto req, String userId) {
+        requireOwnedDevice(req.deviceId(), userId);
         String sha256 = req.sha256Hash();
         if (sha256 == null || sha256.isBlank()) {
             // Stand-in for client-side hashing a real Rust storage agent would perform before upload:
@@ -159,8 +188,9 @@ public class FileService {
         return FileMapper.toDto(saved);
     }
 
-    public StorageFileDto trash(String id) {
+    public StorageFileDto trash(String id, String userId) {
         StorageFile file = findOrThrow(id);
+        requireOwnedDevice(file.getDeviceId(), userId);
 
         Instant expiresAtInstant = Instant.now().plus(Duration.ofDays(trashRetentionDays));
 
@@ -185,8 +215,9 @@ public class FileService {
         return FileMapper.toDto(saved);
     }
 
-    public StorageFileDto restore(String id) {
+    public StorageFileDto restore(String id, String userId) {
         StorageFile file = findOrThrow(id);
+        requireOwnedDevice(file.getDeviceId(), userId);
 
         file.setInTrash(false);
         file.setTrashedAt(null);
@@ -209,8 +240,9 @@ public class FileService {
         return FileMapper.toDto(saved);
     }
 
-    public void purge(String id) {
+    public void purge(String id, String userId) {
         StorageFile file = findOrThrow(id);
+        requireOwnedDevice(file.getDeviceId(), userId);
 
         publish(DomainEvent.of(
                 AuditEventType.FILE_DELETE,
@@ -229,6 +261,21 @@ public class FileService {
     private StorageFile findOrThrow(String id) {
         return repository.findById(id)
                 .orElseThrow(() -> ApiException.notFound("FILE_NOT_FOUND", "File not found: " + id));
+    }
+
+    /**
+     * Skipped when {@code userId} is blank (internal service-to-service caller — see class javadoc).
+     * When present, 404s exactly like a missing file rather than 403, so a probing caller can't use
+     * the error to distinguish "not yours" from "doesn't exist" and enumerate other users' file ids.
+     */
+    private void requireOwnedDevice(String deviceId, String userId) {
+        if (userId == null || userId.isBlank()) {
+            return;
+        }
+        DeviceDto device = deviceClient.getDevice(deviceId);
+        if (device.userId() == null || !device.userId().equals(userId)) {
+            throw ApiException.notFound("FILE_NOT_FOUND", "File not found");
+        }
     }
 
     private void publish(DomainEvent event) {

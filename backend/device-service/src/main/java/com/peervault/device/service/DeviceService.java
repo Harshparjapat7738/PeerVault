@@ -86,7 +86,7 @@ public class DeviceService {
         );
     }
 
-    public DeviceDto confirmPairing(PairConfirmRequest request, String remoteAddr, String ownerActor) {
+    public DeviceDto confirmPairing(PairConfirmRequest request, String remoteAddr, String ownerActor, String ownerUserId) {
         PairingSession session = pairingSessionRepository.findById(request.sessionId())
                 .orElseThrow(() -> ApiException.notFound("PAIRING_SESSION_NOT_FOUND",
                         "No pairing session for id " + request.sessionId()));
@@ -131,6 +131,7 @@ public class DeviceService {
                 .pairedAt(TimeFormats.today())
                 .pinnedLocation(null)
                 .ownerActor(ownerActor)
+                .userId(ownerUserId)
                 .sharingPermissions(request.permissions())
                 .build();
         deviceRepository.save(device);
@@ -151,16 +152,31 @@ public class DeviceService {
         return deviceMapper.toDto(device);
     }
 
-    public List<DeviceDto> listDevices() {
-        return deviceRepository.findAll().stream().map(deviceMapper::toDto).toList();
+    /**
+     * Tenant-scoped listing: every real (gateway-forwarded) call carries {@code X-User-Id}, so this
+     * always filters to the caller's own devices. {@code userId} is only ever null for a hypothetical
+     * internal caller — none exists today — in which case an empty list is returned rather than
+     * silently dumping the whole mesh's devices, since nothing currently depends on that behavior.
+     */
+    public List<DeviceDto> listDevices(String userId) {
+        if (userId == null || userId.isBlank()) {
+            return List.of();
+        }
+        return deviceRepository.findByUserId(userId).stream().map(deviceMapper::toDto).toList();
     }
 
-    public DeviceDto getDevice(String id) {
-        return deviceMapper.toDto(findDeviceOrThrow(id));
+    /**
+     * {@code userId} is the caller's {@code X-User-Id} when this came from a real browser request
+     * through the gateway; it's null for internal Eureka-to-Eureka lookups (transfer-service's/
+     * share-service's {@code DeviceClient}), which stay unrestricted — those services do their own
+     * ownership comparison against the returned {@link DeviceDto#userId()} instead.
+     */
+    public DeviceDto getDevice(String id, String userId) {
+        return deviceMapper.toDto(findOwnedDeviceOrThrow(id, userId));
     }
 
-    public DeviceDto toggleFreeze(String id, String ownerActor) {
-        Device device = findDeviceOrThrow(id);
+    public DeviceDto toggleFreeze(String id, String ownerActor, String userId) {
+        Device device = findOwnedDeviceOrThrow(id, userId);
 
         if (device.getStatus() == DeviceStatus.FROZEN) {
             device.setStatus(DeviceStatus.ONLINE);
@@ -193,8 +209,8 @@ public class DeviceService {
         return deviceMapper.toDto(device);
     }
 
-    public void revokeDevice(String id, String ownerActor) {
-        Device device = findDeviceOrThrow(id);
+    public void revokeDevice(String id, String ownerActor, String userId) {
+        Device device = findOwnedDeviceOrThrow(id, userId);
 
         // Publish before deleting so the event still carries the device's data.
         publish(DomainEvent.of(
@@ -211,8 +227,8 @@ public class DeviceService {
         deviceRepository.deleteById(id);
     }
 
-    public DeviceDto addRoot(String id, RootRequest request, String ownerActor) {
-        Device device = findDeviceOrThrow(id);
+    public DeviceDto addRoot(String id, RootRequest request, String ownerActor, String userId) {
+        Device device = findOwnedDeviceOrThrow(id, userId);
 
         StorageRoot root = toStorageRoot(request);
         device.getAllowedRoots().add(root);
@@ -232,8 +248,8 @@ public class DeviceService {
         return deviceMapper.toDto(device);
     }
 
-    public void heartbeat(String id, HeartbeatRequest request) {
-        Device device = findDeviceOrThrow(id);
+    public void heartbeat(String id, HeartbeatRequest request, String userId) {
+        Device device = findOwnedDeviceOrThrow(id, userId);
 
         if (request.status() != null) {
             device.setStatus(request.status());
@@ -280,6 +296,21 @@ public class DeviceService {
     private Device findDeviceOrThrow(String id) {
         return deviceRepository.findById(id)
                 .orElseThrow(() -> ApiException.notFound("DEVICE_NOT_FOUND", "No device with id " + id));
+    }
+
+    /**
+     * Same lookup, plus tenant-isolation: when {@code userId} is present (a real gateway-forwarded
+     * request) the device must belong to that user, or this 404s exactly like a missing id — a
+     * mismatched owner is intentionally indistinguishable from "doesn't exist" so a probing caller
+     * can't use the error to enumerate other users' device ids. {@code userId == null} (internal
+     * service-to-service call) skips the check entirely, preserving existing internal trust.
+     */
+    private Device findOwnedDeviceOrThrow(String id, String userId) {
+        Device device = findDeviceOrThrow(id);
+        if (userId != null && !userId.isBlank() && !userId.equals(device.getUserId())) {
+            throw ApiException.notFound("DEVICE_NOT_FOUND", "No device with id " + id);
+        }
+        return device;
     }
 
     private StorageRoot toStorageRoot(RootRequest request) {

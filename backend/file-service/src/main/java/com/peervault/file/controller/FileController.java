@@ -25,40 +25,46 @@ public class FileController {
             @RequestParam(required = false) String deviceId,
             @RequestParam(required = false) String rootId,
             @RequestParam(required = false) String search,
-            @RequestParam(required = false) String type
+            @RequestParam(required = false) String type,
+            @RequestHeader(value = "X-User-Id", required = false) String userId
     ) {
-        return fileService.list(deviceId, rootId, search, type);
+        return fileService.list(deviceId, rootId, search, type, userId);
     }
 
     @GetMapping("/trash")
-    public List<StorageFileDto> listTrash() {
-        return fileService.listTrash();
+    public List<StorageFileDto> listTrash(@RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return fileService.listTrash(userId);
     }
 
     @GetMapping("/{id}")
-    public StorageFileDto getById(@PathVariable String id) {
-        return fileService.getById(id);
+    public StorageFileDto getById(@PathVariable String id,
+                                   @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return fileService.getById(id, userId);
     }
 
     @PostMapping
-    public ResponseEntity<StorageFileDto> upload(@Valid @RequestBody UploadFileRequestDto req) {
-        StorageFileDto dto = fileService.upload(req);
+    public ResponseEntity<StorageFileDto> upload(@Valid @RequestBody UploadFileRequestDto req,
+                                                  @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        StorageFileDto dto = fileService.upload(req, userId);
         return ResponseEntity.status(HttpStatus.CREATED).body(dto);
     }
 
     @PostMapping("/{id}/trash")
-    public StorageFileDto trash(@PathVariable String id) {
-        return fileService.trash(id);
+    public StorageFileDto trash(@PathVariable String id,
+                                 @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return fileService.trash(id, userId);
     }
 
     @PostMapping("/{id}/restore")
-    public StorageFileDto restore(@PathVariable String id) {
-        return fileService.restore(id);
+    public StorageFileDto restore(@PathVariable String id,
+                                   @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return fileService.restore(id, userId);
     }
 
     @DeleteMapping("/{id}/purge")
-    public ResponseEntity<Void> purge(@PathVariable String id) {
-        fileService.purge(id);
+    public ResponseEntity<Void> purge(@PathVariable String id,
+                                       @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        fileService.purge(id, userId);
         return ResponseEntity.noContent().build();
     }
 }

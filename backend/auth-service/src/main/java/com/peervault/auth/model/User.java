@@ -25,6 +25,10 @@ public class User {
 
     private String passwordHash;
 
+    /** Optional display name collected at signup; may be null for accounts created before this field
+     *  existed, or if the caller never supplied one. Purely cosmetic — never used for auth/lookup. */
+    private String name;
+
     private long tokenVersion = 0L;
 
     /** Purely cosmetic — mirrors mfa_enabled in the architecture doc's DDL; no real MFA is implemented. */
@@ -37,11 +41,12 @@ public class User {
     public User() {
     }
 
-    public User(String id, String email, String passwordHash, long tokenVersion, boolean mfaEnabled,
+    public User(String id, String email, String passwordHash, String name, long tokenVersion, boolean mfaEnabled,
                 Instant createdAt, Instant updatedAt) {
         this.id = id;
         this.email = email;
         this.passwordHash = passwordHash;
+        this.name = name;
         this.tokenVersion = tokenVersion;
         this.mfaEnabled = mfaEnabled;
         this.createdAt = createdAt;
@@ -74,6 +79,14 @@ public class User {
 
     public void setPasswordHash(String passwordHash) {
         this.passwordHash = passwordHash;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
     }
 
     public long getTokenVersion() {
@@ -112,6 +125,7 @@ public class User {
         private String id;
         private String email;
         private String passwordHash;
+        private String name;
         private long tokenVersion = 0L;
         private boolean mfaEnabled = true;
         private Instant createdAt;
@@ -129,6 +143,11 @@ public class User {
 
         public Builder passwordHash(String passwordHash) {
             this.passwordHash = passwordHash;
+            return this;
+        }
+
+        public Builder name(String name) {
+            this.name = name;
             return this;
         }
 
@@ -153,7 +172,7 @@ public class User {
         }
 
         public User build() {
-            return new User(id, email, passwordHash, tokenVersion, mfaEnabled, createdAt, updatedAt);
+            return new User(id, email, passwordHash, name, tokenVersion, mfaEnabled, createdAt, updatedAt);
         }
     }
 }

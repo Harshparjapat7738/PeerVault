@@ -25,6 +25,14 @@ public record DeviceDto(
         Boolean isFavorite,
         String pairedAt,
         String pinnedLocation,
-        SharingPermissionsDto sharingPermissions
+        SharingPermissionsDto sharingPermissions,
+        /**
+         * The account that owns this device (set at pair/confirm time from the caller's JWT). Present
+         * on the wire (unlike {@code Device.ownerActor}, which is display text only) because
+         * file-service/transfer-service need to compare it against their own caller's {@code X-User-Id}
+         * to enforce tenant isolation without a live RPC back into device-service for every check —
+         * see backend/CLAUDE.md's device/root-ownership hardening pass.
+         */
+        String userId
 ) {
 }

@@ -34,7 +34,8 @@ public class DeviceMapper {
                 device.getIsFavorite(),
                 device.getPairedAt(),
                 device.getPinnedLocation(),
-                device.getSharingPermissions()
+                device.getSharingPermissions(),
+                device.getUserId()
         );
     }
 

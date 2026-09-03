@@ -1,4 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { LoginPage } from './pages/LoginPage';
+import { LandingPage } from './pages/LandingPage';
+import { getToken, getStoredUser, clearSession } from './api/client';
+import { readQueryParam } from './lib/url';
 import { Header } from './components/Header';
 import { DeviceGrid } from './components/DeviceGrid';
 import { QrPairingModal } from './components/QrPairingModal';
@@ -27,15 +31,72 @@ import { Device, StorageFile, TransferTask, AuditEvent, StorageRoot, ShareReques
 import { getShareRequestsSent, getShareRequestsReceived, getSharedStorage } from './api-client';
 import { subscribeStomp } from './stomp-client';
 
+/**
+ * Top-level router. This app has exactly two "routes" — `/login` (public) and everything else
+ * (the dashboard below, protected) — so a full router library would be overkill; plain
+ * `window.location.pathname` plus a `popstate` listener covers it.
+ *
+ * `/` is the one path that branches on auth state instead of always guarding: signed-out visitors
+ * get the public marketing `LandingPage` (its own dark visual system, see
+ * `pages/LandingPage.tsx`), signed-in visitors get the existing `Dashboard` exactly as before —
+ * nothing about the authenticated app changes. Every other unknown path still falls through to the
+ * `getToken()` guard below and is sent to `/login`, unchanged from before this page existed.
+ *
+ * Route guard: no `peervault_token` in localStorage means there's no signed-in session, so the
+ * dashboard (which immediately fires authenticated requests on mount — see `refreshShareRequests`/
+ * `refreshSharedStorage` below) is never rendered; the user is sent to `/login` instead. A 401 from
+ * any in-flight request past that point is handled the same way by `apiFetch` itself
+ * (`src/api/client.ts`), so this guard only needs to cover "no token at all yet".
+ */
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('devices');
+  const [pathname, setPathname] = useState(() => (typeof window !== 'undefined' ? window.location.pathname : '/'));
+
+  useEffect(() => {
+    const onPopState = () => setPathname(window.location.pathname);
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  if (pathname === '/login') {
+    return <LoginPage />;
+  }
+
+  if (pathname === '/' && !getToken()) {
+    return <LandingPage />;
+  }
+
+  if (!getToken()) {
+    window.location.replace('/login');
+    return null;
+  }
+
+  return <Dashboard />;
+}
+
+/** Every tab `Header.tsx`'s nav / the JSX below actually switches on — kept in one place so the
+ *  `?tab=` deep link from the landing page's auth-aware CTAs (`lib/auth-nav.ts`) can be validated
+ *  against the real set instead of trusting an arbitrary query string. */
+const VALID_DASHBOARD_TABS = ['devices', 'files', 'transfers', 'security', 'sharing', 'topology', 'agent-cli', 'architecture'];
+
+function Dashboard() {
+  // `?tab=` lets a link from outside the dashboard (currently: the public landing page's
+  // authenticated-visitor CTAs, see `lib/auth-nav.ts#dashboardCtaHref`) land straight on a specific
+  // tab instead of always the default "devices" one — the tabs themselves aren't new, this just
+  // makes the entry point aware of which one was asked for. Falls back to "devices" for a missing
+  // or unrecognized value rather than trusting the query string outright.
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const requested = readQueryParam('tab');
+    return requested && VALID_DASHBOARD_TABS.includes(requested) ? requested : 'devices';
+  });
   const [devices, setDevices] = useState<Device[]>(INITIAL_DEVICES);
   const [files, setFiles] = useState<StorageFile[]>(INITIAL_FILES);
   const [transfers, setTransfers] = useState<TransferTask[]>(INITIAL_TRANSFERS);
   const [auditLogs, setAuditLogs] = useState<AuditEvent[]>(INITIAL_AUDIT_LOGS);
-  
+
   // Modals & Drawers state
-  const [isPairingOpen, setIsPairingOpen] = useState(false);
+  // `?action=pair` (paired with `?tab=devices`) auto-opens the real QR-pairing modal — used by
+  // "Connect Device" CTAs on the landing page, which mean to start that flow, not just show the tab.
+  const [isPairingOpen, setIsPairingOpen] = useState(() => readQueryParam('action') === 'pair');
   const [previewFile, setPreviewFile] = useState<StorageFile | null>(null);
   const [directTransferFile, setDirectTransferFile] = useState<StorageFile | null>(null);
   const [isAlertsDrawerOpen, setIsAlertsDrawerOpen] = useState(false);
@@ -416,6 +477,7 @@ export default function App() {
   const unreadAlertsCount = auditLogs.filter(a => a.severity === 'critical' || a.severity === 'warning').length;
   const trashFiles = files.filter(f => f.inTrash);
   const activeDeviceForCLI = devices.find(d => d.id === 'dev_m3_max_01') || devices[0];
+  const currentUser = getStoredUser();
 
   return (
     <div className="min-h-screen bg-[#F9F8F6] text-[#1A1A1A] flex flex-col selection:bg-[#1A1A1A] selection:text-[#F9F8F6]">
@@ -452,6 +514,8 @@ export default function App() {
         onOpenPairing={() => setIsPairingOpen(true)}
         unreadAlertsCount={unreadAlertsCount}
         onOpenAlerts={() => setIsAlertsDrawerOpen(true)}
+        currentUser={currentUser}
+        onLogout={() => { clearSession(); window.location.assign('/login'); }}
       />
 
       {/* Main Content Area */}

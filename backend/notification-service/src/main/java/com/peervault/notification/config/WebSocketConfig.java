@@ -27,14 +27,22 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
+        // setAllowedOrigins(String...) — unlike api-gateway.yml's allowedOrigins (a List<String>
+        // property, which Spring Boot's relaxed Binder happily comma-splits from one env var) — takes
+        // each argument as one literal origin. Splitting frontendOrigin ourselves keeps both config
+        // surfaces accepting the same "http://a,http://b" value (see config-repo/api-gateway.yml's
+        // comment and FRONTEND_ORIGIN in .env.example) instead of this one silently treating the
+        // whole comma-joined string as a single, never-matching origin.
+        String[] allowedOrigins = frontendOrigin.split("\\s*,\\s*");
+
         // SockJS fallback; plain-WS/STOMP clients can also connect to /ws directly without the SockJS
         // handshake if the frontend later uses a raw STOMP client.
         registry.addEndpoint("/ws")
-                .setAllowedOrigins(frontendOrigin)
+                .setAllowedOrigins(allowedOrigins)
                 .withSockJS();
 
         registry.addEndpoint("/ws/webrtc")
-                .setAllowedOrigins(frontendOrigin)
+                .setAllowedOrigins(allowedOrigins)
                 .withSockJS();
     }
 

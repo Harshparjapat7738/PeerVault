@@ -6,7 +6,20 @@ spring:
     gateway:
       globalcors:
         cors-configurations:
-          '[/**]':
+          # Scoped to the REST surface only (every non-WS route here is under /api/v1/**) —
+          # deliberately NOT '[/**]'. /ws/** already gets its own correct CORS headers from
+          # notification-service's WebSocketConfig (SockJS's /ws/info polling endpoint sets them
+          # itself), and matching it here too made the gateway add a *second* identical
+          # Access-Control-Allow-Origin header on top of that response when proxying — browsers
+          # reject a response with more than one such header outright, so /ws/info failed with a
+          # CORS error for every real (i.e. actually authenticated, actually reaching
+          # notification-service) request.
+          '[/api/v1/**]':
+            # peervault.frontend-origin (application.yml) is FRONTEND_ORIGIN, default
+            # http://localhost:3000. Spring's relaxed binding accepts a comma-separated value here
+            # too, e.g. FRONTEND_ORIGIN=http://localhost:3000,http://10.242.248.71:3000 — handy
+            # when testing cross-device pairing (see frontend/README.md's "Cross-device / LAN
+            # setup"): the desktop keeps using localhost while a phone on the LAN IP also passes.
             allowedOrigins: "${peervault.frontend-origin}"
             allowedMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
             allowedHeaders: "*"

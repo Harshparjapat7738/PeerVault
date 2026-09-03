@@ -165,7 +165,7 @@ class TransferModesIntegrationTest {
     private DeviceDto device(String id) {
         return new DeviceDto(id, "Device " + id, DeviceType.LAPTOP, OsType.LINUX, "1.0.0", DeviceStatus.ONLINE,
                 "fingerprint-" + id, "10.0.0.1", NatType.FULL_CONE, "2026-01-01 00:00:00", null, null, 0L, 0L,
-                List.of(), List.of(), 0, true, null, "2026-01-01 00:00:00", null, null);
+                List.of(), List.of(), 0, true, null, "2026-01-01 00:00:00", null, null, "test-user");
     }
 
     private record InitiateBody(String fileId, String targetDeviceId) {

@@ -48,6 +48,9 @@ export interface Device {
   pairedAt: string;
   pinnedLocation?: string;
   sharingPermissions?: SharingPermissions;
+  /** The account that owns this device (server-assigned at pairing time). Optional so the existing
+   *  mock devices in data/initialData.ts don't need backfilling. */
+  userId?: string;
 }
 
 export interface StorageFile {

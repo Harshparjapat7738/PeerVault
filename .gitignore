@@ -1,12 +1,128 @@
-node_modules/
-build/
-dist/
-coverage/
-.DS_Store
-*.log
-.env*
-!.env.example
-.vite/
+# PeerVault Storage Mesh — see GITIGNORE_AUDIT.md for the audit this file was built from
+# (what's ignored and why, what's deliberately still tracked, and any pre-existing gaps found).
 
-# Maven build output (backend/*/target)
+# ==============================================================================
+# Environment & Secrets
+# Real .env files carry real credentials (MONGODB_URI, JWT_SECRET, etc. — see
+# backend/.env.example / frontend/.env.example for the documented shape). Template/example
+# files are explicitly un-ignored so they stay tracked for anyone cloning the repo.
+# ==============================================================================
+.env
+.env.*
+*.env
+!.env.example
+!**/.env.example
+
+# Spring Boot local/dev-only profile overrides. Shared profiles that belong in the repo
+# (application.yml, application-docker.yml, config-repo/*.yml, etc.) are untouched by this —
+# only the personal "-local"/"-dev" override convention is matched.
+application-local.yml
+application-local.yaml
+application-local.properties
+application-dev.yml
+application-dev.yaml
+application-dev.properties
+
+# Local secret/credential/key material. Nothing under these names should ever be real and
+# committed — if a template is ever needed, name it *.example.* instead, which these patterns
+# don't touch.
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+*.jks
+*.crt
+*.cer
+
+# ==============================================================================
+# Java / Maven
+# ==============================================================================
 target/
+*.class
+*.jar
+*.war
+# If a Maven wrapper is ever added, its checked-in jar must stay tracked despite the *.jar rule
+# above — this repo has no wrapper today, but the negation is cheap insurance against that
+# common footgun.
+!.mvn/wrapper/maven-wrapper.jar
+
+# ==============================================================================
+# Node / Frontend
+# ==============================================================================
+node_modules/
+dist/
+build/
+.next/
+.vite/
+*.tsbuildinfo
+
+# ==============================================================================
+# Build Artifacts (generic)
+# ==============================================================================
+out/
+coverage/
+
+# ==============================================================================
+# Logs & Runtime
+# ==============================================================================
+*.log
+logs/
+*.pid
+*.tmp
+
+# ==============================================================================
+# IDE / Editor
+# JetBrains project state is always personal (this repo has Java modules, so IntelliJ is a
+# realistic choice). VS Code's *team-shared* config is intentionally kept tracked — only the
+# rest of .vscode/ (personal window/workspace state) is ignored.
+# ==============================================================================
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# Claude Code local session/runtime state — mirrors this machine's own (untracked)
+# .git/info/exclude, promoted here so it's enforced on every clone, not just this one.
+# .claude/settings.json, agents/, and skills/ are shared team config and are NOT matched.
+.claude/scheduled_tasks.lock
+.claude/scheduled_tasks.json
+.claude/routines/.state/
+.claude/worktrees/
+.claude/checkpoints/
+.claude/mailbox/
+.claude/agent-registry.json
+.claude/agent-memory-local/
+.claude/first-run
+.claude/assistant-daemon-state.json
+.claude/settings.local.json
+
+# ==============================================================================
+# OS Files
+# ==============================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==============================================================================
+# Testing / Coverage
+# (Maven's surefire/failsafe reports land under each module's target/, already covered above.)
+# ==============================================================================
+test-results/
+reports/
+
+# ==============================================================================
+# Docker / Local Development
+# The tracked backend/docker-compose.yml stays as-is — only a personal override layered on
+# top of it is ignored.
+# ==============================================================================
+docker-compose.override.yml
+
+# ==============================================================================
+# Temporary Files
+# ==============================================================================
+.cache/
+.tmp/

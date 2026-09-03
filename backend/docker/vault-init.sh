@@ -17,6 +17,18 @@ until vault status >/dev/null 2>&1; do
   sleep 2
 done
 
+if [ -z "$JWT_SECRET" ]; then
+  echo "############################################################################"
+  echo "# WARNING: JWT_SECRET is not set in backend/.env — falling back to the      #"
+  echo "# well-known dev default baked into this script (committed to the repo).   #"
+  echo "# Anyone who has read this file can forge a valid JWT for ANY user.        #"
+  echo "# This is fine for local dev. Before any real/shared/production           #"
+  echo "# deployment, set JWT_SECRET in backend/.env to a random 32+ byte,         #"
+  echo "# base64-encoded value, e.g.:                                              #"
+  echo "#   openssl rand -base64 32                                                #"
+  echo "############################################################################"
+fi
+
 vault kv put secret/application \
   jwt.secret="${JWT_SECRET:-cGVlcnZhdWx0LWRldi1zdXBlci1zZWNyZXQtc2lnbmluZy1rZXktcGxlYXNlLXJvdGF0ZS0zMmI=}"
 

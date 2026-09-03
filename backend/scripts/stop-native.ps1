@@ -14,7 +14,7 @@ $PidsFile = 'C:\pv-native\pids\services.txt'
 $infraNames = @('mongod', 'redis', 'vault', 'kafka')
 
 if (-not (Test-Path $PidsFile)) {
-    Write-Host "No $PidsFile found — nothing tracked to stop." -ForegroundColor Yellow
+    Write-Host "No $PidsFile found - nothing tracked to stop." -ForegroundColor Yellow
     exit 0
 }
 
@@ -25,7 +25,7 @@ Get-Content $PidsFile | Where-Object { $_ -match '=' } | ForEach-Object {
         return
     }
     if (Get-Process -Id $procId -ErrorAction SilentlyContinue) {
-        # taskkill /T kills the whole process tree — needed for kafka-server-start.bat, which is a
+        # taskkill /T kills the whole process tree - needed for kafka-server-start.bat, which is a
         # cmd.exe wrapper around a child java.exe that Stop-Process alone would leave orphaned.
         taskkill /PID $procId /T /F 2>&1 | Out-Null
         Write-Host "Stopped $name (pid $procId)" -ForegroundColor Green

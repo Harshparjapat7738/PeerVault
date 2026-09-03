@@ -59,13 +59,25 @@ public class TransferService {
     @Value("${peervault.transfer.default-relay-speed-bytes-per-sec}")
     private long defaultRelaySpeedBytesPerSec;
 
-    public List<TransferTaskDto> listTransfers() {
-        return transferTaskRepository.findAll().stream().map(transferTaskMapper::toDto).toList();
+    /**
+     * Tenant-scoped listing when {@code userId} is present (every real gateway-forwarded browser
+     * request carries {@code X-User-Id}). Falls back to the unfiltered list otherwise — the P2P/relay
+     * endpoints don't attach an owner to the tasks they create (see {@code TransferTask.initiatedByUserId}'s
+     * javadoc; a known, documented gap, not fixed in this pass), so a strict empty-list default would
+     * make those tasks permanently invisible from this endpoint. This mirrors every other
+     * "skip the check for callers with no identity to check" gate in this hardening pass.
+     */
+    public List<TransferTaskDto> listTransfers(String userId) {
+        if (userId == null || userId.isBlank()) {
+            return transferTaskRepository.findAll().stream().map(transferTaskMapper::toDto).toList();
+        }
+        return transferTaskRepository.findByInitiatedByUserId(userId).stream().map(transferTaskMapper::toDto).toList();
     }
 
-    public TransferTaskDto startDownload(DownloadRequest request) {
+    public TransferTaskDto startDownload(DownloadRequest request, String userId) {
         StorageFileDto file = fileClient.getFile(request.fileId());
         DeviceDto sourceDevice = deviceClient.getDevice(file.deviceId());
+        requireOwned(sourceDevice, userId);
 
         TransferMode mode = sourceDevice.directP2PCapable() ? TransferMode.P2P_DIRECT : TransferMode.RELAY_ENCRYPTED;
         String now = TimeFormats.now();
@@ -90,6 +102,7 @@ public class TransferService {
                 .sha256Checksum(file.sha256Hash())
                 .createdAt(now)
                 .startedAt(now)
+                .initiatedByUserId(userId)
                 .build();
         transferTaskRepository.save(task);
 
@@ -107,10 +120,12 @@ public class TransferService {
         return transferTaskMapper.toDto(task);
     }
 
-    public TransferTaskDto startDirectTransfer(DirectTransferRequest request) {
+    public TransferTaskDto startDirectTransfer(DirectTransferRequest request, String userId) {
         StorageFileDto file = fileClient.getFile(request.fileId());
         DeviceDto sourceDevice = deviceClient.getDevice(file.deviceId());
         DeviceDto targetDevice = deviceClient.getDevice(request.targetDeviceId());
+        requireOwned(sourceDevice, userId);
+        requireOwned(targetDevice, userId);
 
         StorageRootDto targetRoot = targetDevice.allowedRoots().stream()
                 .filter(r -> r.id().equals(request.targetRootId()))
@@ -141,6 +156,7 @@ public class TransferService {
                 .sha256Checksum(file.sha256Hash())
                 .createdAt(now)
                 .startedAt(now)
+                .initiatedByUserId(userId)
                 .build();
         transferTaskRepository.save(task);
 
@@ -158,8 +174,8 @@ public class TransferService {
         return transferTaskMapper.toDto(task);
     }
 
-    public TransferTaskDto togglePause(String id) {
-        TransferTask task = findOrThrow(id);
+    public TransferTaskDto togglePause(String id, String userId) {
+        TransferTask task = findOwnedOrThrow(id, userId);
 
         if (task.getStatus() == TransferStatus.PAUSED) {
             task.setStatus(TransferStatus.TRANSFERRING);
@@ -172,8 +188,8 @@ public class TransferService {
         return transferTaskMapper.toDto(task);
     }
 
-    public void cancel(String id) {
-        TransferTask task = findOrThrow(id);
+    public void cancel(String id, String userId) {
+        TransferTask task = findOwnedOrThrow(id, userId);
 
         // Publish before deleting so the event still carries the task's device data.
         publish(DomainEvent.of(
@@ -190,8 +206,8 @@ public class TransferService {
         transferTaskRepository.deleteById(id);
     }
 
-    public void simulateGlitch(String id) {
-        TransferTask task = findOrThrow(id);
+    public void simulateGlitch(String id, String userId) {
+        TransferTask task = findOwnedOrThrow(id, userId);
         task.setStatus(TransferStatus.PAUSED);
         task.setSpeedBytesPerSec(0L);
         transferTaskRepository.save(task);
@@ -225,6 +241,32 @@ public class TransferService {
     private TransferTask findOrThrow(String id) {
         return transferTaskRepository.findById(id)
                 .orElseThrow(() -> ApiException.notFound("TRANSFER_NOT_FOUND", "No transfer task with id " + id));
+    }
+
+    /**
+     * Same lookup, plus tenant isolation — but only for tasks that actually recorded an owner
+     * ({@link TransferTask#getInitiatedByUserId()} non-null). P2P/relay-created tasks and tasks
+     * predating this field have no recorded owner and stay unrestricted here, exactly like every
+     * other "skip when we can't attribute an owner" gate in this pass — the alternative (deny) would
+     * make pause/cancel/glitch permanently unusable on those transfers for their own real user.
+     */
+    private TransferTask findOwnedOrThrow(String id, String userId) {
+        TransferTask task = findOrThrow(id);
+        if (userId != null && !userId.isBlank() && task.getInitiatedByUserId() != null
+                && !userId.equals(task.getInitiatedByUserId())) {
+            throw ApiException.notFound("TRANSFER_NOT_FOUND", "No transfer task with id " + id);
+        }
+        return task;
+    }
+
+    /** Skipped when {@code userId} is blank (internal caller) — see class-level tenant-isolation notes. */
+    private void requireOwned(DeviceDto device, String userId) {
+        if (userId == null || userId.isBlank()) {
+            return;
+        }
+        if (device.userId() == null || !device.userId().equals(userId)) {
+            throw ApiException.notFound("DEVICE_NOT_FOUND", "No device with id " + device.id());
+        }
     }
 
     private void publish(DomainEvent event) {

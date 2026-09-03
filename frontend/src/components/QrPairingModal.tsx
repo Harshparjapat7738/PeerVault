@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { Scanner } from '@yudiel/react-qr-scanner';
-import { ShieldCheck, Clock, RefreshCw, QrCode, Camera, AlertCircle } from 'lucide-react';
+import { ShieldCheck, Clock, RefreshCw, QrCode, Camera, AlertCircle, Info, KeyRound, ChevronDown, ChevronUp } from 'lucide-react';
 import { Device, DeviceType, OSType, PairingSession, SharingPermissions } from '../types';
-import { initiatePairing, confirmPairing, ApiError } from '../api-client';
+import { initiatePairing, confirmPairing, ApiError, isAuthError } from '../api-client';
+import { API_BASE_URL } from '../api/client';
 import { DevicePermissionDialog } from './DevicePermissionDialog';
 
 interface QrPairingModalProps {
@@ -18,13 +19,113 @@ interface ScannedPayload {
 }
 
 /**
- * QR-only device pairing. There is no PIN, no manual code entry anywhere in this component — the
- * session id only ever moves from `initiatePairing()` into a rendered QR code and back out through
- * a decoded camera frame. See backend/CLAUDE.md Task 9 for the full rationale.
+ * `peervault://pair?session=<id>&fp=<fingerprint>` is a custom URI **scheme**, not an HTTP(S) URL —
+ * no browser or OS registers a handler for it, and it is never meant to be navigated to or fetched.
+ * It exists purely as a data container the QR code carries: this function is the *only* place that
+ * ever reads it, and it only ever reads it — parses `session`/`fp` back out with the WHATWG `URL`
+ * parser and returns plain strings. Nothing in this file ever does `window.location.href = raw` or
+ * `fetch(raw)`; if either shows up in a diff touching this file, that's a regression, not a feature.
+ *
+ * Returns `null` for anything that isn't recognizably a PeerVault pairing link at all (wrong scheme,
+ * or not a URL-shaped string in the first place) — callers use that to show "not a valid PeerVault
+ * pairing code" without even attempting to explain what went wrong. A link that *is* shaped right
+ * but is missing one of the two params throws `MissingParamError` instead, so callers can show the
+ * more specific "missing session or fingerprint" message.
+ */
+class MissingParamError extends Error {}
+
+function parsePairingUri(raw: string): ScannedPayload | null {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return null; // not a URL at all — e.g. a random QR code, or plain text
+  }
+  // `peervault://pair?session=...` parses (WHATWG generic syntax) with "pair" as the *host*, not
+  // part of the path — `pair?...` sits right after `//`. Checked as `protocol` + `hostname` rather
+  // than a raw `startsWith('peervault://pair?')` string check so equivalent forms (e.g. a scanner
+  // library that normalizes a trailing "/" before the "?") still match.
+  if (url.protocol !== 'peervault:' || url.hostname !== 'pair') return null;
+  const sessionId = url.searchParams.get('session');
+  const fingerprint = url.searchParams.get('fp');
+  if (!sessionId || !fingerprint) throw new MissingParamError();
+  return { sessionId, fingerprint };
+}
+
+/** Cheap shape check for enabling the manual-entry submit button — true for anything that at least
+ *  *looks* like a `peervault://pair` link (even one missing a param, so the button stays clickable
+ *  and lets `handleManualSubmit` surface the specific "missing session or fingerprint" error rather
+ *  than just sitting disabled with no explanation). */
+function isPairingUri(raw: string): boolean {
+  try {
+    return parsePairingUri(raw) !== null;
+  } catch (err) {
+    return err instanceof MissingParamError;
+  }
+}
+
+/** Turns a raw backend error into something a user can actually act on. A 401 here means the
+ *  session died (expired/invalid token) — `apiFetch` (`api/client.ts`) already clears it and
+ *  redirects to `/login` before this ever renders, so this message is just what's briefly visible
+ *  during that redirect, not something the user needs to act on themselves. */
+function describePairingError(err: unknown): string {
+  if (isAuthError(err)) {
+    return 'Your session has expired. Redirecting to login…';
+  }
+  if (err instanceof ApiError) {
+    // status 0 = the fetch itself never got a response — either the backend isn't running, or
+    // (the common case on a second device) this page is calling an API_BASE_URL the *current*
+    // device can't reach, e.g. still "localhost" while opened from a phone. CORS rejections land
+    // here too (the browser reports those as a generic network failure, not a distinguishable
+    // status). Naming the actual URL in use turns "it just doesn't work" into something checkable.
+    if (err.status === 0) {
+      return `Could not reach the PeerVault backend at ${API_BASE_URL}. If you're on a different ` +
+        `device than the one running the backend, "localhost" won't resolve to it — set ` +
+        `VITE_API_BASE_URL to your PC's LAN IP (e.g. http://10.242.248.71:8080) and reload. Also ` +
+        `check the backend's FRONTEND_ORIGIN matches this page's origin, or the request may be ` +
+        `silently blocked by CORS instead.`;
+    }
+    return err.message;
+  }
+  return 'Could not reach device-service. Is the backend mesh running?';
+}
+
+/** Best-effort classification of a getUserMedia failure. Camera access is only guaranteed on a
+ *  "secure context" (https:// or http://localhost) — opening this app from a LAN IP over plain
+ *  http:// (the common case for a phone reaching a PC by IP) is the single most likely reason the
+ *  Scan tab's camera never starts, so it gets called out by name instead of leaving the raw
+ *  DOMException message ("Permission denied" etc.) to speak for itself. */
+function describeCameraError(err: { message?: string; name?: string } | Error): string {
+  const name = (err as any).name || '';
+  const insecureContext = typeof window !== 'undefined' &&
+    window.location.protocol !== 'https:' &&
+    window.location.hostname !== 'localhost' &&
+    window.location.hostname !== '127.0.0.1';
+  if (insecureContext || name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Camera access is not available on this connection. Browsers only allow the camera ' +
+      'over HTTPS or on localhost — a LAN IP like this one (' + window.location.origin + ') is ' +
+      'often blocked. Use an HTTPS tunnel (e.g. ngrok) for reliable camera access, or enter the ' +
+      "session details from the QR manually below.";
+  }
+  return `Camera error: ${err.message || 'unknown error'}. You can also enter the session details manually below.`;
+}
+
+/**
+ * QR-only device pairing — the session id only ever moves from `initiatePairing()` into a rendered
+ * QR code and back out either through a decoded camera frame, or (see `showManualEntry` below) a
+ * plain-text fallback of the same two values, for when the camera itself is unavailable (most
+ * commonly: this page opened over plain http:// on a LAN IP, where browsers block getUserMedia).
+ * There is still no separate human-typable *pairing code* — the fallback is the QR's own payload
+ * typed in by hand, not an alternate secret. See backend/CLAUDE.md Task 9 for the full rationale.
  *
  * Two modes, since this is one web app standing in for both sides of a real handshake:
  * - "Generate": this browser already has a paired identity and is inviting a new device.
  * - "Scan": this browser IS the new device, scanning a QR shown elsewhere (another tab/device).
+ *
+ * Important: the QR encodes a `peervault://` URI — a scheme only *this app's own* Scan tab knows
+ * how to read. A phone's stock Camera/QR app will not open anything for it (no OS-level handler
+ * exists for a made-up scheme) — the joining device must have this same web app open and use its
+ * in-app Scan QR tab, not its regular camera.
  */
 export const QrPairingModal: React.FC<QrPairingModalProps> = ({ isOpen, onClose, onPairSuccess }) => {
   const [mode, setMode] = useState<'generate' | 'scan'>('generate');
@@ -42,6 +143,12 @@ export const QrPairingModal: React.FC<QrPairingModalProps> = ({ isOpen, onClose,
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
 
+  // Manual entry fallback — only surfaced once a real camera error happens, or the user asks for
+  // it themselves; the Scanner stays the primary path.
+  const [showManualEntry, setShowManualEntry] = useState(false);
+  const [manualSessionId, setManualSessionId] = useState('');
+  const [manualFingerprint, setManualFingerprint] = useState('');
+
   useEffect(() => {
     if (!isOpen) {
       setMode('generate');
@@ -51,7 +158,17 @@ export const QrPairingModal: React.FC<QrPairingModalProps> = ({ isOpen, onClose,
       setScanned(null);
       setScanError(null);
       setConfirmError(null);
+      setShowManualEntry(false);
+      setManualSessionId('');
+      setManualFingerprint('');
+      return;
     }
+    // Dev diagnostic: the #1 cause of "QR scan does nothing on my other device" is this page
+    // silently talking to a backend the other device can't reach (still "localhost" instead of
+    // the host machine's LAN IP). Logging it up front makes that checkable in devtools without
+    // needing to trigger a failing request first.
+    // eslint-disable-next-line no-console
+    console.info(`[QrPairingModal] API_BASE_URL = ${API_BASE_URL} · page origin = ${window.location.origin}`);
   }, [isOpen]);
 
   // Live countdown against the real expiresInSeconds the backend returned.
@@ -80,26 +197,65 @@ export const QrPairingModal: React.FC<QrPairingModalProps> = ({ isOpen, onClose,
       setSession(s);
       setSecondsLeft(s.expiresInSeconds);
     } catch (err) {
-      setGenerateError(err instanceof ApiError ? err.message : 'Could not reach device-service. Is the backend mesh running?');
+      setGenerateError(describePairingError(err));
     } finally {
       setGenerating(false);
     }
   };
 
+  /** Decoded camera frame → `parsePairingUri` only, never a navigation or fetch of the raw string
+   *  (see the comment on `parsePairingUri` itself). This is also the only place a "not a valid
+   *  PeerVault pairing code" verdict gets produced — there is no separate generic "here's what this
+   *  link is" page anywhere in this app for an unrecognized scan to fall through to. */
   const handleScan = (rawValue: string) => {
     if (scanned) return; // already decoded one — ignore further frames until reset
     try {
-      const url = new URL(rawValue);
-      const sessionId = url.searchParams.get('session');
-      const fingerprint = url.searchParams.get('fp');
-      if (url.protocol !== 'peervault:' || !sessionId || !fingerprint) {
-        throw new Error('not a pairing code');
+      const payload = parsePairingUri(rawValue);
+      if (!payload) {
+        setScanError('This QR code is not a valid PeerVault pairing code.');
+        return;
       }
       setScanError(null);
-      setScanned({ sessionId, fingerprint });
-    } catch {
-      setScanError('That QR code isn’t a PeerVault pairing code.');
+      setScanned(payload);
+    } catch (err) {
+      if (err instanceof MissingParamError) {
+        setScanError('Invalid pairing QR code – missing session or fingerprint.');
+      } else {
+        setScanError('This QR code is not a valid PeerVault pairing code.');
+      }
     }
+  };
+
+  /** Same destination as `handleScan`, just fed from the manual-entry inputs instead of a decoded
+   *  camera frame — for when the camera itself isn't available (see `describeCameraError`). Not a
+   *  separate pairing code: these are the exact `session`/`fp` values the QR itself encodes, just
+   *  read and typed by a human instead of a camera — from here on (permission dialog, confirm call,
+   *  success/error states) it is the *identical* path `handleScan` uses, via the same `scanned`
+   *  state and the same `handleAccept` below.
+   *
+   *  Convenience: if the whole `peervault://pair?...` link got pasted into the Session ID field
+   *  (e.g. copied from wherever it failed to open as a link), parse it the same way a scan would
+   *  instead of making the person split it into two fields by hand. */
+  const handleManualSubmit = () => {
+    try {
+      const pastedUri = parsePairingUri(manualSessionId);
+      if (pastedUri) {
+        setScanError(null);
+        setScanned(pastedUri);
+        return;
+      }
+    } catch (err) {
+      if (err instanceof MissingParamError) {
+        setScanError('Invalid pairing QR code – missing session or fingerprint.');
+        return;
+      }
+      // fall through — not a peervault:// link at all, treat the field as a plain session id
+    }
+    const sessionId = manualSessionId.trim();
+    const fingerprint = manualFingerprint.trim();
+    if (!sessionId || !fingerprint) return;
+    setScanError(null);
+    setScanned({ sessionId, fingerprint });
   };
 
   const handleAccept = async (
@@ -110,6 +266,10 @@ export const QrPairingModal: React.FC<QrPairingModalProps> = ({ isOpen, onClose,
     setConfirming(true);
     setConfirmError(null);
     try {
+      // scanned.fingerprint is deliberately not sent here — it's a client-side display value only
+      // (shown in DevicePermissionDialog for the human to visually cross-check against the
+      // generating device's screen). The backend already has it from pair/init and re-derives
+      // everything it needs from sessionId alone; see backend/README.md's pairing section.
       const device = await confirmPairing({
         sessionId: scanned.sessionId,
         name: profile.name,
@@ -121,7 +281,7 @@ export const QrPairingModal: React.FC<QrPairingModalProps> = ({ isOpen, onClose,
       onPairSuccess(device);
       onClose();
     } catch (err) {
-      setConfirmError(err instanceof ApiError ? err.message : 'Could not reach device-service. Is the backend mesh running?');
+      setConfirmError(describePairingError(err));
     } finally {
       setConfirming(false);
     }
@@ -180,9 +340,16 @@ export const QrPairingModal: React.FC<QrPairingModalProps> = ({ isOpen, onClose,
                 {!session ? (
                   <div className="py-8">
                     <QrCode className="w-14 h-14 mx-auto mb-4 text-[#1A1A1A]/40" />
-                    <p className="text-xs text-[#5A5955] mb-6 max-w-sm mx-auto leading-relaxed">
-                      Generate a real, scannable QR code. The joining device scans it — with a camera —
-                      and grants its own permissions before it's ever added to the mesh.
+                    <p className="text-xs text-[#5A5955] mb-3 max-w-sm mx-auto leading-relaxed">
+                      Generate a real, scannable QR code. The joining device scans it from{' '}
+                      <strong className="text-[#1A1A1A]">inside this same PeerVault app's own Scan
+                      QR tab</strong> — not its regular camera app — and grants its own permissions
+                      before it's ever added to the mesh.
+                    </p>
+                    <p className="text-[11px] text-[#76746E] mb-6 max-w-sm mx-auto leading-relaxed">
+                      Pairing from another device on your network? It needs to reach this app and
+                      backend by your PC's LAN IP, not "localhost" — see the frontend README's
+                      "Cross-device / LAN setup" section.
                     </p>
                     {generateError && (
                       <div className="mb-4 p-3 bg-rose-50 border border-rose-300 text-xs text-rose-800 flex items-start space-x-2 text-left">
@@ -200,6 +367,13 @@ export const QrPairingModal: React.FC<QrPairingModalProps> = ({ isOpen, onClose,
                   </div>
                 ) : secondsLeft > 0 ? (
                   <div className="bg-[#F9F8F6] p-5 border border-[#1A1A1A]/20 flex flex-col items-center justify-center space-y-3">
+                    <div className="flex items-start space-x-1.5 text-left bg-[#FFFFFF] border border-[#1A1A1A]/15 px-3 py-2 max-w-[260px]">
+                      <Info className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[#5A5955]" />
+                      <p className="text-[11px] text-[#5A5955] leading-relaxed">
+                        Scan with the <strong className="text-[#1A1A1A]">Scan QR</strong> tab in the
+                        PeerVault app on your other device — your phone's own camera app can't open this.
+                      </p>
+                    </div>
                     <canvas ref={canvasRef} className="bg-white border border-[#1A1A1A]/20 p-2 shadow-xs" />
                     <div className="flex items-center justify-between w-full text-xs px-1 text-[#5A5955] font-mono">
                       <span className="flex items-center">
@@ -230,7 +404,8 @@ export const QrPairingModal: React.FC<QrPairingModalProps> = ({ isOpen, onClose,
             {mode === 'scan' && (
               <div className="space-y-3">
                 <p className="text-xs text-[#5A5955] leading-relaxed">
-                  Point this device's camera at the QR code shown on the other screen.
+                  Point this device's camera at the QR code shown on the other screen — using this
+                  app's own scanner below, not your device's regular camera/QR app.
                 </p>
                 {scanError && (
                   <div className="p-3 bg-rose-50 border border-rose-300 text-xs text-rose-800 flex items-start space-x-2">
@@ -242,20 +417,86 @@ export const QrPairingModal: React.FC<QrPairingModalProps> = ({ isOpen, onClose,
                   <Scanner
                     paused={!!scanned}
                     onScan={(codes) => codes[0] && handleScan(codes[0].rawValue)}
-                    onError={(err) => setScanError(`Camera error: ${err.message}`)}
+                    onError={(err) => {
+                      setScanError(describeCameraError(err as any));
+                      setShowManualEntry(true); // a real camera failure — surface the fallback immediately
+                    }}
                   />
                 </div>
                 <p className="text-[11px] text-[#76746E] text-center">
                   Camera permission is requested by your browser on first use.
                 </p>
+
+                <div className="pt-2 border-t border-[#1A1A1A]/10">
+                  <button
+                    type="button"
+                    onClick={() => setShowManualEntry(v => !v)}
+                    className="w-full flex items-center justify-between text-[11px] font-mono uppercase text-[#5A5955] hover:text-[#1A1A1A] py-1 cursor-pointer"
+                  >
+                    <span className="flex items-center space-x-1.5">
+                      <KeyRound className="w-3 h-3" />
+                      <span>Camera not working? Enter details manually</span>
+                    </span>
+                    {showManualEntry ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </button>
+                  {showManualEntry && (
+                    <div className="space-y-2 pt-2">
+                      <p className="text-[11px] text-[#76746E] leading-relaxed">
+                        Paste the full <code className="font-mono">peervault://pair?...</code> link
+                        into the first field below, or read the two values off the generating
+                        device's screen and type them in separately — either way this is the exact
+                        same `session`/`fp` pair the QR code encodes, not a separate code. (Remember:
+                        that link isn't a normal web address — it can't be opened by tapping it or
+                        pasting it into a browser's address bar; it only means anything typed in here.)
+                      </p>
+                      <div>
+                        <label className="block text-[10px] font-mono uppercase text-[#1A1A1A] font-semibold mb-1">Session ID (or full pairing link)</label>
+                        <input
+                          type="text"
+                          value={manualSessionId}
+                          onChange={(e) => setManualSessionId(e.target.value)}
+                          placeholder="peervault://pair?session=...&fp=... — or just the session id"
+                          className="w-full px-3 py-2 bg-[#FFFFFF] border border-[#1A1A1A]/30 text-[#1A1A1A] text-xs font-mono focus:outline-none focus:border-[#1A1A1A]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-mono uppercase text-[#1A1A1A] font-semibold mb-1">Device Fingerprint</label>
+                        <input
+                          type="text"
+                          value={manualFingerprint}
+                          onChange={(e) => setManualFingerprint(e.target.value)}
+                          placeholder="Not needed if you pasted the full link above"
+                          className="w-full px-3 py-2 bg-[#FFFFFF] border border-[#1A1A1A]/30 text-[#1A1A1A] text-xs font-mono focus:outline-none focus:border-[#1A1A1A]"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleManualSubmit}
+                        disabled={!manualSessionId.trim() || (!manualFingerprint.trim() && !isPairingUri(manualSessionId))}
+                        className="w-full inline-flex items-center justify-center space-x-1.5 px-4 py-2 bg-[#1A1A1A] hover:bg-[#333333] text-[#F9F8F6] text-xs font-mono font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        <span>Use These Values</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
+          </div>
+
+          {/* Always-visible diagnostic footer — the single most useful line for "why doesn't this
+              work on my other device": whether this page is even pointed at a reachable backend. */}
+          <div className="px-6 py-2 border-t border-[#1A1A1A]/10 bg-[#F9F8F6]">
+            <p className="text-[10px] font-mono text-[#76746E] truncate" title={API_BASE_URL}>
+              Backend: {API_BASE_URL}
+            </p>
           </div>
         </div>
       </div>
 
       {scanned && (
         <DevicePermissionDialog
+          sessionId={scanned.sessionId}
           deviceFingerprint={scanned.fingerprint}
           onAccept={handleAccept}
           onDecline={handleDecline}

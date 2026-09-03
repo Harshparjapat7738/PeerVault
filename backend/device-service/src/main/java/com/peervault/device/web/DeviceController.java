@@ -31,39 +31,40 @@ public class DeviceController {
 
     @PostMapping("/pair/confirm")
     public DeviceDto confirmPairing(@Valid @RequestBody PairConfirmRequest request, HttpServletRequest httpRequest) {
-        return deviceService.confirmPairing(request, httpRequest.getRemoteAddr(), resolveActor(httpRequest));
+        return deviceService.confirmPairing(request, httpRequest.getRemoteAddr(), resolveActor(httpRequest), resolveUserId(httpRequest));
     }
 
     @GetMapping
-    public List<DeviceDto> listDevices() {
-        return deviceService.listDevices();
+    public List<DeviceDto> listDevices(HttpServletRequest httpRequest) {
+        return deviceService.listDevices(resolveUserId(httpRequest));
     }
 
     @GetMapping("/{id}")
-    public DeviceDto getDevice(@PathVariable String id) {
-        return deviceService.getDevice(id);
+    public DeviceDto getDevice(@PathVariable String id, HttpServletRequest httpRequest) {
+        return deviceService.getDevice(id, resolveUserId(httpRequest));
     }
 
     @PostMapping("/{id}/freeze")
     public DeviceDto toggleFreeze(@PathVariable String id, HttpServletRequest httpRequest) {
-        return deviceService.toggleFreeze(id, resolveActor(httpRequest));
+        return deviceService.toggleFreeze(id, resolveActor(httpRequest), resolveUserId(httpRequest));
     }
 
     @PostMapping("/{id}/revoke")
     public ResponseEntity<Void> revokeDevice(@PathVariable String id, HttpServletRequest httpRequest) {
-        deviceService.revokeDevice(id, resolveActor(httpRequest));
+        deviceService.revokeDevice(id, resolveActor(httpRequest), resolveUserId(httpRequest));
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/{id}/roots")
     public DeviceDto addRoot(@PathVariable String id, @Valid @RequestBody RootRequest request,
                               HttpServletRequest httpRequest) {
-        return deviceService.addRoot(id, request, resolveActor(httpRequest));
+        return deviceService.addRoot(id, request, resolveActor(httpRequest), resolveUserId(httpRequest));
     }
 
     @PatchMapping("/{id}/heartbeat")
-    public ResponseEntity<Void> heartbeat(@PathVariable String id, @RequestBody HeartbeatRequest request) {
-        deviceService.heartbeat(id, request);
+    public ResponseEntity<Void> heartbeat(@PathVariable String id, @RequestBody HeartbeatRequest request,
+                                           HttpServletRequest httpRequest) {
+        deviceService.heartbeat(id, request, resolveUserId(httpRequest));
         return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
     }
 
@@ -74,5 +75,15 @@ public class DeviceController {
             return "User";
         }
         return "User (" + email + ")";
+    }
+
+    /**
+     * api-gateway forwards X-User-Id once the JWT is validated — null only for a direct
+     * service-to-service call that bypasses the gateway (no such caller exists for these endpoints
+     * today; every business-service caller of device-service goes through {@code GET /{id}} instead,
+     * see {@code DeviceService}'s ownership helpers).
+     */
+    private String resolveUserId(HttpServletRequest request) {
+        return request.getHeader("X-User-Id");
     }
 }

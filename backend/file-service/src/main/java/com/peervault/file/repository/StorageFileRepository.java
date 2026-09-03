@@ -11,4 +11,7 @@ public interface StorageFileRepository extends MongoRepository<StorageFile, Stri
     List<StorageFile> findByInTrash(Boolean inTrash);
 
     List<StorageFile> findByInTrashAndTrashExpiresAtInstantBefore(Boolean inTrash, Instant instant);
+
+    /** Backs the tenant-scoped trash listing: trashed files restricted to a caller's own device ids. */
+    List<StorageFile> findByInTrashAndDeviceIdIn(Boolean inTrash, List<String> deviceIds);
 }

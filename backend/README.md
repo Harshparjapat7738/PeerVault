@@ -83,6 +83,13 @@ regardless, deleted files only ever sit in a 30-day soft-trash quarantine, so no
    ```
 5. **Stop everything:** `docker compose down` (add `-v` to also drop the Redis/Kafka/Vault container volumes).
 
+**Testing from a second device (e.g. scanning a device-pairing QR code from a phone)?** "localhost"
+only ever means the device you're on — a phone on the same Wi-Fi needs your PC's actual LAN IP, and
+Windows Firewall blocks inbound LAN connections to dev ports by default. See frontend/README.md's
+"Cross-device / LAN setup" section for the full walkthrough; the backend-side piece of it is setting
+`FRONTEND_ORIGIN` in `backend/.env` (see `.env.example`) and allowing inbound TCP 8080 (and 3000 for
+the frontend dev server) through the firewall for your private network.
+
 ### Running a single service outside Docker (for iterating)
 
 Everything still needs Config Server + Eureka + Kafka + Redis + Vault up (`docker compose up -d redis kafka vault vault-init eureka-server config-server`), then from `backend/`:
@@ -201,6 +208,18 @@ fallback code in this flow. A few specifics worth being precise about:
 - There is no real-time notification back to the device that generated the QR. Only the browser
   that called `pair/confirm` gets the result (via its own response) — the generating device has no
   live way to learn pairing succeeded in this iteration.
+- **`peervault://` is a made-up URI scheme, not a real one any OS registers a handler for, and it is
+  not an HTTP(S) URL.** It is only ever *parsed* — read back into a plain `sessionId`/`fingerprint`
+  pair — by this app's own in-app "Scan QR" camera (`QrPairingModal.tsx`'s `parsePairingUri`), never
+  navigated to or fetched. Scanning the QR with a phone's stock Camera/QR app, or pasting the raw
+  string into a browser's address bar or a search box, does not open anything PeerVault-related —
+  there's no app or page on the other end of that scheme. Depending on the phone/browser, that can
+  surface as nothing happening at all, or as some unrelated "here's what this text might be" search
+  result — **that page is not part of PeerVault and isn't wrong about anything, it's just a browser's
+  generic fallback for a string it doesn't recognize as a link it can open.** The joining device must
+  have the PeerVault frontend open in a browser and use its **Scan QR** tab (or its manual
+  session-id/fingerprint entry fallback), not the OS camera. See frontend/README.md's "Cross-device /
+  LAN setup" for the rest of what a second device needs (reachability + CORS + camera permissions).
 
 ## Kafka topics
 

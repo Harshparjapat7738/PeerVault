@@ -724,3 +724,398 @@ what was claimed and what's real:
   `sharingPermissions` field rather than a separate collection, no `DEVICE_PAIRED_VIA_QR` event, no
   real-time notify-the-generating-device) was already true of the code Task 9 shipped — verified by
   re-reading the relevant files, not just trusting the earlier write-up.
+
+### Task 9 addendum 2 — cross-device LAN pairing fix
+
+**Root cause of "I scanned the QR and nothing happened" when pairing from a second device on the
+same Wi-Fi: three independent, unrelated blockers, not one bug.**
+1. The QR's `peervault://` scheme has no OS-level handler — scanning it with a phone's stock camera
+   app was never going to do anything. It was always meant to be read by this app's own Scan QR tab.
+2. `VITE_API_BASE_URL`/`VITE_WS_BASE_URL` default to `localhost:8080`, which on a second device
+   resolves to that device itself, not the machine running the backend.
+3. `FRONTEND_ORIGIN` (gateway CORS + notification-service's WebSocket CORS) defaults to
+   `http://localhost:3000` — once the frontend is loaded from a LAN IP instead, its Origin header no
+   longer matches and every request gets CORS-rejected.
+A fourth, related constraint (not a bug, a platform limit): `getUserMedia` is only reliably available
+on a secure context (`https://` or `http://localhost`), so the Scan tab's camera itself may not start
+at all on a plain `http://<LAN-IP>` origin.
+
+**Fixed/added, no functional pairing logic changed:**
+- **Real bug fixed:** `notification-service/config/WebSocketConfig.java`'s `setAllowedOrigins(String...)`
+  took `peervault.frontend-origin` as one literal string — a comma-separated value (recommended in the
+  docs below, for keeping `localhost` and a LAN IP both allowed at once) would have silently become a
+  single, never-matching origin, unlike the gateway's `List<String>`-typed CORS property, which Spring
+  Boot's relaxed Binder does comma-split. Now splits on `,` before passing to `setAllowedOrigins`, so
+  both config surfaces genuinely accept the same value.
+- `backend/scripts/run-native.ps1` / `backend/docker-compose.yml`: `FRONTEND_ORIGIN` is now overridable
+  from `backend/.env`, the same pattern `MONGODB_URI` already used — previously hardcoded to
+  `http://localhost:3000` with no way to override without editing the script/compose file directly.
+  `backend/.env.example` documents it.
+- `frontend/src/components/QrPairingModal.tsx`: explicit on-screen copy that the QR is scanned via
+  this app's own Scan QR tab, not a phone's camera app; `describePairingError` now names the actual
+  `API_BASE_URL` in play on a network-unreachable (status 0) failure instead of a generic message;
+  new manual session-id/fingerprint entry fallback (same values the QR encodes, not a new secret) for
+  when the camera can't start, auto-surfaced on a real camera error via the new `describeCameraError`;
+  an always-visible footer showing the current `API_BASE_URL` plus a console log on open, for
+  confirming at a glance whether the page is even pointed at a reachable backend.
+- `frontend/.env.local` created (gitignored) with `VITE_API_BASE_URL`/`VITE_WS_BASE_URL` pointed at
+  this dev machine's LAN IP — a per-machine convenience file, not something every clone should expect
+  to inherit.
+- Docs: `frontend/README.md` gained a "Cross-device / LAN setup" section (LAN IP discovery, the
+  `.env.local` + `FRONTEND_ORIGIN` pairing, Windows Firewall rule, camera/HTTPS-tunnel guidance);
+  `backend/README.md` gained a pointer to it plus the `peervault://`-is-in-app-only note under
+  "Device pairing: what's real."
+
+**Verified:** `npx tsc --noEmit` on `frontend/` clean; `mvn -pl notification-service -am compile`
+clean. Not re-verified end-to-end against a real second device in this pass (no such device available
+here) — the fix is config/reachability, not new pairing logic, so Task 9's existing pairing-flow
+correctness is unchanged; only whether requests *arrive* at all should differ.
+
+### Task 9 addendum 3 — "generic cryptographic-link page" report, and QR-parsing hardening
+
+A follow-up report described scanning the pairing QR and landing on a page saying "This string is a
+cryptographic device-pairing link designed for a peer-to-peer (P2P) storage application…". **That
+text does not exist anywhere in this codebase** (confirmed by search) — there is no route or
+component in this app that renders any such description, so there was nothing to remove or gate
+behind a dev-only route. The only place a `peervault://` string is ever produced is the QR itself,
+and the only place it's ever consumed is `QrPairingModal.tsx`'s in-app scanner/parser. The
+overwhelmingly likely explanation, consistent with addendum 2's root cause #1: the QR was scanned
+with something other than this app's own Scan QR tab — a phone's stock Camera/QR app, most likely —
+which, finding no registered handler for the made-up `peervault://` scheme, fell back to treating the
+decoded text as a search query; the described page is that browser/search engine's own generic
+"here's what this text might be" result, not anything PeerVault renders or controls. This is called
+out explicitly now in both READMEs so it reads as "you used the wrong scanner" rather than "the app
+is broken."
+
+**Real hardening done regardless, since the report is a legitimate prompt to double-check this path
+rather than just re-explaining it:**
+- `QrPairingModal.tsx`'s QR-parsing logic was pulled out of `handleScan` into a standalone
+  `parsePairingUri()` (plus a cheap `isPairingUri()` shape check), with its own doc comment stating
+  outright that this is the *only* function that ever reads the `peervault://` string, and that it
+  only ever reads it — never `fetch()`s or navigates to it. Validation is now stricter (checks
+  `url.hostname === 'pair'`, not just the scheme) and produces two distinct, specific messages
+  instead of one generic one: **"This QR code is not a valid PeerVault pairing code"** (wrong scheme
+  entirely) vs. **"Invalid pairing QR code – missing session or fingerprint"** (right scheme, broken
+  params) — a `MissingParamError` class distinguishes the two cases through the same parse call.
+- The manual-entry fallback (addendum 2) now also accepts a whole pasted `peervault://pair?...` link
+  in its Session ID field, auto-splitting it via the same `parsePairingUri` — directly addressing the
+  scenario in this report: someone who has the raw link text (e.g. copied from wherever it failed to
+  open as a link) can paste the whole thing in one field instead of manually splitting `session=`/
+  `fp=` out of a query string by hand.
+- `DevicePermissionDialog.tsx` gained a `sessionId` prop and now shows both the (shortened) session
+  id and fingerprint in its header — previously only the fingerprint was shown, so there was no way
+  to visually cross-check *which* pairing session was being confirmed, only whose key it claimed to
+  be. New `shorten()` helper (first 8 + last 6 chars, full value still in a `title` tooltip) backs
+  both. `confirmPairing`'s call site gained a one-line comment on why `scanned.fingerprint` is
+  deliberately never sent in the confirm body — it's a client-side-only display value; the backend
+  already has everything it needs from `sessionId` alone (see backend/README.md's pairing section).
+- Both READMEs' pairing sections now state explicitly that `peervault://` is not an HTTP(S) URL,
+  should never be pasted into an address bar or search box, and that any generic-looking page seen
+  after doing so is a browser fallback, not a PeerVault page.
+
+**Verified:** `npx tsc --noEmit` on `frontend/` clean.
+
+## Pre-deployment audit & hardening pass — 2026-09-03
+
+Full-stack audit against `PRE_DEPLOYMENT_AUDIT.md`/`DEPLOYMENT_READINESS.md` (repo root — read those
+first for full findings/evidence). Summary of what changed here, since this is the file those two docs
+point back to for detail:
+
+**What was checked:** auth/JWT flow, device/file/transfer authorization, CORS, actuator exposure,
+docker-compose network exposure, JWT-secret/Vault-dev-mode handling, error-response leakage, npm/Java
+dependency vulnerabilities, and — using this session's own uncommitted working-tree state, not authored
+here — the real `frontend/src/pages/LoginPage.tsx` + `frontend/src/api/{client,authApi}.ts` login flow
+that has replaced the old "paste a token into localStorage" dev stub (verified wired correctly:
+`App.tsx` gates on `getToken()`, redirects to `/login`, `Header.tsx` shows the real signed-in user; the
+legacy `api-client.ts` `getAuthToken`/`setAuthToken` are now thin deprecated wrappers over the same
+`peervault_token` key, not a second, divergent auth path).
+
+**Fixed:**
+- **Device/file/transfer tenant isolation (the device↔user ownership gap flagged since Task 2, finally
+  closed).** Added `Device.userId` (server-set at `pair/confirm`) and `TransferTask.initiatedByUserId`
+  (server-set at `startDownload`/`startDirectTransfer`). `DeviceController`/`DeviceService` now gate
+  list/get/freeze/revoke/addRoot/heartbeat on it; `file-service` gained its own `DeviceClient` (mirrors
+  transfer-service's/share-service's) and gates list/listTrash/getById/upload/trash/restore/purge on it;
+  `transfer-service` gates listing/pause/cancel/glitch on it. The gating rule throughout: enforced only
+  when the caller's `X-User-Id` is present (every real gateway-forwarded browser request has it);
+  internal Eureka-to-Eureka calls (share-service's `FileClient`/`DeviceClient`, transfer-service's
+  `DeviceClient`) carry no such header and are unaffected by design — verified case by case, not
+  assumed, including confirming share-service's `FileClient` sends zero identity headers today (Task 4's
+  "sole gate" design is preserved exactly). `p2p/initiate` and `relay/upload` were deliberately **not**
+  touched — see "Remaining risks" below, same reasoning Task 5/6 already gave for their existing
+  trust level.
+- **Internal service ports were reachable from outside the host.** Every business/infra port in
+  `docker-compose.yml` (`8081`-`8087`, plus Mongo/Redis/Kafka/Vault/Eureka/Config Server) was bound to
+  `0.0.0.0` — since none of those services re-verify the JWT themselves (they trust gateway-forwarded
+  `X-User-Id`), this let any network caller skip `JwtAuthGlobalFilter` entirely and forge identity
+  headers directly. Rebound to `127.0.0.1`-only; only `api-gateway` (8080) is still public. Verified this
+  doesn't change local-dev ergonomics (`curl localhost:808x` from the host still works).
+- **No login rate limiting.** Added a Redis fixed-window limiter to `auth-service` (10 attempts/5 min per
+  email), same shape as share-service's existing `enforceRateLimit`. `auth-service` gained
+  `spring-boot-starter-data-redis` + a `redis` `depends_on` in docker-compose.
+- **Unauthenticated `/actuator/health` leaked per-component details** (Mongo/Redis/Kafka connectivity) —
+  `/actuator/**` is on the JWT filter's public allow-list by design (container orchestrators need it),
+  so `show-details: always` was reachable by anyone. Changed to `never` in `config-repo/application.yml`.
+- **Unhandled exceptions echoed raw `ex.getMessage()`/internals to clients.** `GlobalExceptionHandler`'s
+  catch-all now logs the full exception server-side (with a short reference id) and returns only a
+  generic message + that id — `ApiException`'s controlled messages and bean-validation field errors are
+  unchanged (those were already safe, authored strings).
+- **3 moderate npm vulnerabilities** (`qs`/`body-parser`/`express` DoS chain). Root cause: `express`,
+  `@google/genai`, `dotenv` were unused leftovers from the original AI-Studio scaffold template — nothing
+  in `frontend/src/**` imports any of them, no `server.js` exists. Removed from `package.json`
+  (119 transitive packages dropped); `npm audit` now reports 0 vulnerabilities.
+- **JWT-secret dev-default / Vault dev-mode** — can't be fixed in code without breaking zero-config local
+  dev, so `docker/vault-init.sh` now prints a loud warning when `JWT_SECRET` is unset instead of silently
+  using the repo-committed default, and `.env.example` states the requirement explicitly.
+
+**Verified (not a bug, worth recording so it isn't re-litigated):** decompiled
+`DefaultServerHttpRequestBuilder.header()` (spring-web 6.1.14, `javap -c`) to confirm
+`JwtAuthGlobalFilter`'s `.header("X-User-Id", ...)` call *replaces* rather than appends — a client
+cannot smuggle its own `X-User-Id` past the gateway. The entire ownership-fix architecture above depends
+on that being true through the gateway; it only doesn't hold for the direct-port bypass, which the
+docker-compose fix above closes separately.
+
+**Build verification:** full `mvn -DskipTests package` (all 11 backend modules) — BUILD SUCCESS, repackage
+step included. `mvn test-compile` (all modules, including the two Testcontainers suites, with their
+`DeviceDto` fixtures updated for the new trailing `userId` field) — BUILD SUCCESS. `npx tsc --noEmit` and
+`npm run build` on `frontend/` — both clean. **Not run:** the Testcontainers integration tests themselves,
+or any live Docker-based end-to-end walkthrough — no Docker daemon was reachable in this environment
+(same pre-existing sandbox limitation Task 8/9 already hit). Re-run `mvn -pl share-service,transfer-service
+test` and the full `docker compose up -d --build` README walkthrough with Docker Desktop running to close
+that gap before considering this deployment-verified rather than deployment-*ready*.
+
+**Current status:** the two most severe, cleanly-fixable gaps (tenant isolation, direct-port bypass) are
+closed. See `DEPLOYMENT_READINESS.md` for the full go/no-go call — headline: READY WITH WARNINGS, not
+recommended for a large/mutually-untrusting public audience until the WebSocket cross-user broadcast leak
+below is closed.
+
+**Remaining risks (deliberately not fixed in this pass, all pre-existing and already documented before
+today except where noted):**
+- **WebSocket topics have no per-user targeting** — `/topic/share/**` broadcasts every user's share
+  activity to every connected browser (flagged since Task 3; still open). Real fix needs an authenticated
+  `/ws` handshake + `convertAndSendToUser`, genuine new infrastructure, not attempted here to avoid
+  destabilizing every real-time tab under time pressure.
+- `p2p/initiate`/`relay/upload` still don't check device ownership (pre-existing, Task 5/6's own
+  documented trust level — now the one remaining place the ownership fix above doesn't reach).
+- `sharingPermissions` still isn't enforced by share-service/transfer-service (flagged since Task 9).
+- No resumable upload recovery for interrupted relay transfers (flagged since Task 6).
+- Vault dev-mode / JWT-secret default require operator action before any real deployment — cannot be
+  closed by a code change alone (see `.env.example`).
+- No Java dependency vulnerability scan was run (no network access to an advisory DB in this
+  environment) — recommend `mvn org.owasp:dependency-check-maven:check` or Dependabot before go-live.
+
+## Landing page implementation — 2026-09-03
+
+Status: **COMPLETE**
+
+Public, unauthenticated marketing landing page for the frontend (`frontend/src/`), added at `/`
+without touching the existing authenticated dashboard. Scorecard in `LANDING_PAGE_AUDIT.md` (repo
+root); this section is the narrative.
+
+**Implemented:** all 14 sections from the brief — navbar, hero mesh diagram, cloud-vs-mesh
+comparison, 6 benefit cards, 6-step "how it works," a device-connection demo, a chunked transfer
+demo, a mesh-expansion section, a 6-layer security walkthrough, an interactive clickable mesh
+visualizer, 6 use-case cards, an end-to-end product workflow stepper, a final CTA, and a footer —
+each its own component under `frontend/src/components/landing/` (`HeroMesh.tsx`,
+`CloudComparison.tsx`, `Benefits.tsx`, `HowItWorks.tsx`, `DeviceConnectionDemo.tsx`,
+`TransferDemo.tsx`, `MeshExpansion.tsx`, `SecurityFlow.tsx`, `MeshVisualizer.tsx`, `UseCases.tsx`,
+`ProductWorkflow.tsx`, `FinalCTA.tsx`, `Navbar.tsx`, `Footer.tsx`), assembled by
+`frontend/src/pages/LandingPage.tsx`. Shared GSAP/reduced-motion/visual primitives live in
+`components/landing/shared.tsx` (`useGsapScope` — a `gsap.context()`-wrapped `useLayoutEffect` hook
+every section uses for automatic ScrollTrigger/timeline cleanup on unmount; `usePrefersReducedMotion`;
+`Section`/`SectionHeading`/`GlassCard`/`MeshBackdrop`/`StatusPill`).
+
+**Design decision, made deliberately rather than asked about:** the landing page is visually a
+*separate dark system* from the dashboard's light "editorial" theme (`index.css`, cream background,
+serif/mono), because the dashboard itself already has precedent for a dark, slate/cyan,
+network-visualization aesthetic wherever it actually depicts the mesh (`NetworkTopology.tsx`,
+`SecurityAndShield.tsx` both use `slate-900`/`slate-950` + cyan accents) — the landing page extends
+that existing sub-language to the whole page rather than inventing a third visual system or forcing
+the brief's "dark-first, glowing network" direction onto the light dashboard chrome. Fonts are
+unchanged (Newsreader serif, Plus Jakarta Sans body, JetBrains Mono labels) so the page still reads
+as the same product once a visitor logs in. Brand name kept as the app's real name, **PeerVault**
+(`index.html`, `Header.tsx`, `LoginPage.tsx` all already say "PeerVault Storage Mesh") — the brief's
+"Storage Mesh" naming is used as the descriptive concept throughout copy/nav, not as a product-name
+swap.
+
+**Animations:** GSAP 3 + `ScrollTrigger` throughout (added as a new dependency, `gsap@^3.15.0`; no
+other new runtime dependency was added for animation — no separate motion library). Every animated
+section: (1) checks `prefers-reduced-motion` via `usePrefersReducedMotion()` and, when set, uses
+`gsap.set()` to jump straight to the finished state instead of animating anything; (2) scopes its
+tweens/ScrollTriggers inside `gsap.context()`, reverted in the `useLayoutEffect` cleanup, so nothing
+leaks on unmount; (3) pauses any `repeat: -1` loop (hero packets, cloud-comparison particles, mesh
+visualizer float/particles, CTA background dots) via a `ScrollTrigger` `onEnter`/`onLeave` pair, so
+nothing animates while scrolled off-screen. Interactive replay-able demos (device connection, file
+transfer) autoplay once via a `once: true` ScrollTrigger the first time they enter view, and can be
+replayed on click. No CSS `@keyframes` were used for any of the major animations (only ordinary
+Tailwind color/opacity `transition`s remain for small UI chrome like the navbar's scroll-state
+background and hover states, consistent with the rest of this codebase).
+
+**Routes:**
+- `/` — branches on auth state (`frontend/src/App.tsx`): no `peervault_token` in `localStorage` ⇒
+  the new `LandingPage`; a token present ⇒ the existing `Dashboard`, completely unchanged. Every
+  other path's behavior is unchanged (`/login` ⇒ `LoginPage`; any other unauthenticated path ⇒
+  redirect to `/login`; any other authenticated path ⇒ `Dashboard`).
+- `/login?mode=signup` — new: `LoginPage` now reads a `mode` query param
+  (`readQueryParam('mode') === 'signup'`) to open directly on its existing Sign Up tab. This is the
+  only change made to `LoginPage.tsx`; no new route or page was created for "register" since the app
+  has never had a separate one — inventing `/register` as a distinct route was avoided per the
+  "use the project's existing routing architecture" / "don't invent URLs" constraints.
+- No changes to `/dashboard`, `/devices`, or any other authenticated surface — those paths don't
+  exist as distinct routes in this app (it's tab-based, not route-based, inside `Dashboard`) and
+  weren't invented for this task.
+
+**Verified:** `npx tsc --noEmit` clean; `npm run build` succeeds. Headless-Chromium (Playwright,
+installed ad hoc for this check, not added to `package.json`) verification: zero console/page errors
+across every section at desktop (1440×900) and mobile (390×844) viewports; zero errors with
+`reducedMotion: 'reduce'` (and the finished-state render confirmed via screenshot); a seeded
+`peervault_token` confirmed `/` still renders the real, unchanged `Dashboard` for a signed-in
+visitor; `/login?mode=signup` confirmed to open the Sign Up tab. One real bug was caught and fixed in
+this pass — see `LANDING_PAGE_AUDIT.md`'s "How this was verified" for the SVG `cx`/`cy` fix. Not
+independently re-verified: an actual login round-trip against the live backend mesh (Docker wasn't
+started for this pass, consistent with every prior session in this file) — not needed for the landing
+page itself, since none of its sections call the backend (all demo animations are explicitly
+client-side per the brief), but worth doing before shipping if the "Get Started" → real register
+flow itself needs re-checking.
+
+**Known limitations:** see `LANDING_PAGE_AUDIT.md` — footer omits GitHub/Documentation links (no real
+URLs exist for either in this repo), Playwright used only as an ad hoc verification tool, and the
+pre-existing `>500KB` bundle-size build warning (not introduced by this change, though `gsap` does add
+to it).
+
+## GITIGNORE AUDIT — 2026-09-03
+
+Status: **COMPLETE**
+
+Full-repository `.gitignore` review — the pre-existing 10-rule file (`node_modules/`, `build/`,
+`dist/`, `coverage/`, `.DS_Store`, `*.log`, `.env*`/`!.env.example`, `.vite/`, `target/`) was read
+and understood first, not replaced; every rule in it is preserved. Full scorecard, category-by-
+category reasoning, and every verification command's output are in `GITIGNORE_AUDIT.md` (repo
+root) — this is the short version.
+
+**Updated:** `.gitignore` reorganized into 11 labeled sections (Environment & Secrets, Java/Maven,
+Node/Frontend, Build Artifacts, Logs & Runtime, IDE/Editor, Claude Code local state, OS Files,
+Testing, Docker, Temp Files) and grew from 10 to 62 active pattern lines. Zero rules removed (the
+old `.env*` was split into `.env` + `.env.*` for clarity — identical coverage — plus `*.env` was
+added alongside it); zero duplicates, before or after.
+
+**Protected:** real secret-shaped files that already existed on disk but were at risk only by
+convention, not by an explicit repo rule, now have one: `application-local.*`/`application-dev.*`
+Spring profile overrides, `secrets/`/`credentials/` directories, and key/cert extensions
+(`*.pem`/`*.key`/`*.p12`/`*.jks`/`*.crt`/`*.cer`) are all now explicit rules (none currently exist
+in the repo — this is preemptive, verified not to catch anything real today). More concretely
+useful: **`.claude/` local runtime/session state** (`scheduled_tasks.lock`,
+`scheduled_tasks.json`, `routines/.state/`, `worktrees/`, `checkpoints/`, `mailbox/`,
+`agent-registry.json`, `agent-memory-local/`, `first-run`, `assistant-daemon-state.json`,
+`settings.local.json`) was found to be excluded **only** via this machine's own untracked
+`.git/info/exclude` — meaning any other clone of this repo had zero protection against someone
+committing that state — and has now been promoted into the tracked `.gitignore` so every clone
+gets it. `backend/.dockerignore`'s existing `.idea`/`.iml` allow-list is now mirrored in
+`.gitignore` too, and `.vscode/*` gets the same shared-vs-personal split the brief asked for
+(`extensions.json`/`settings.json`/`launch.json`/`tasks.json` stay trackable, everything else in
+`.vscode/` doesn't).
+
+**Potential tracked-secret issues:** none are accidental. `backend/.env` and `frontend/.env.local`
+(the two real, present-on-disk env files) have never been committed in any of this repo's 3 commits
+(`git log --all --full-history` on both returns nothing) and are correctly ignored today. Two
+**already-known, already-documented, intentional** dev-mode defaults remain committed and were
+re-confirmed, not newly discovered: `backend/docker/vault-init.sh`'s fallback JWT signing secret and
+`backend/docker-compose.yml`'s fixed `VAULT_DEV_ROOT_TOKEN_ID` — both previously flagged in
+`PRE_DEPLOYMENT_AUDIT.md`/`DEPLOYMENT_READINESS.md` as required operator action before any real
+deployment. Per this task's own rule, these are reported here rather than "fixed" by a `.gitignore`
+change, because they can't be — the files containing them must stay tracked for local dev to work,
+and `.gitignore` has no effect on content already in a tracked file.
+
+**Remaining risks:** the two dev-mode-default secrets above are unchanged (out of this task's scope —
+fixing them means changing `vault-init.sh`/`docker-compose.yml` behavior, not `.gitignore`, and both
+docs already carry the "required before production" call). No already-tracked file needed removal
+from Git (`git ls-files | xargs git check-ignore` found zero matches against the new rules) — verified
+after the update, not assumed. Not done, deliberately: no `*.lock` wildcard (would have caught future
+legitimate lock files like a `Cargo.lock` for the still-unbuilt native agent), and no speculative
+Docker volume/data directory names (none exist on disk to justify a guess at their path).
+
+## LANDING PAGE NAVIGATION / INTERACTION — 2026-09-03
+
+Status: **COMPLETE**
+
+Wired every button/CTA/card/link on the landing page (`frontend/src/pages/LandingPage.tsx` +
+`frontend/src/components/landing/*`) to a real destination. Full click-by-click table and every
+verification command's output live in `LANDING_PAGE_NAVIGATION_AUDIT.md` (repo root); this is the
+narrative. First step, per the brief: read `App.tsx`/`Header.tsx`/`LoginPage.tsx`/`api/client.ts`
+directly rather than assuming route names — this app has **no route library** and the authenticated
+side is **tab-based, not route-based** (`Header.tsx`'s `navItems`: `devices`/`files`/`transfers`/
+`sharing`/`security`/`topology`/`agent-cli`/`architecture`). No `/register`, `/dashboard`,
+`/devices`, `/storage`, `/transfers`, `/sharing`, `/audit`, `/settings`, `/profile`, or docs/GitHub
+route exists anywhere in the repo — none of those were invented.
+
+**Navbar:** logo → `/` (same for both auth states, no forced logout). Product/How It
+Works/Why Storage Mesh/Security/Features → real in-page anchors (`#product`/`#how-it-works`/
+`#why-storage-mesh`/`#security`/`#features`), smooth-scrolled via a shared `scrollToId()` helper
+(`lib/url.ts`) that respects `prefers-reduced-motion`. Login → `/login`. "Connect Your Devices" →
+the new auth-aware `dashboardCtaHref()` (below). Mobile hamburger opens/closes a real drawer; every
+link in it closes the drawer before scrolling.
+
+**Hero CTAs:** "Get Started" → `dashboardCtaHref('devices', {signupIfSignedOut: true})`. "See How It
+Works" → `scrollToId('how-it-works')`. The three device nodes in the hero SVG diagram are now
+`role="button"`/keyboard-operable and jump to the real device-connection demo (`#connect-device`) —
+deliberately not a fake "open this device" action, per brief §4.
+
+**Authentication-aware navigation:** one function,
+`frontend/src/lib/auth-nav.ts#dashboardCtaHref(tab, options)`, backs every "do this in your account"
+CTA — no per-component duplicate of an `isAuthenticated()` branch. It calls the same `getToken()`
+(`api/client.ts`) `App.tsx`'s own router already uses: signed out → `/login` (or
+`/login?mode=signup`), signed in → `/?tab=<tab>` (optionally `&action=pair`). **New, small, additive
+read, not a new route:** `Dashboard`'s `activeTab`/`isPairingOpen` initializers (`App.tsx`) now read
+`?tab=`/`?action=pair` on mount — `?tab=` is validated against the real tab-id list before use, so it
+can't select anything that wasn't already a real tab. Confirmed end-to-end with a seeded
+`peervault_token`: `/?tab=devices&action=pair` renders the real `Dashboard` on the real "Storage
+Mesh" tab with the **real `QrPairingModal` already open** (screenshotted) — the actual "Connect
+Device → real device-management page" journey for a signed-in visitor. Honest caveat stated in both
+audit docs: `LandingPage` only ever renders for a signed-out visitor in the first place (`App.tsx`
+sends a token-holder to `Dashboard` before `LandingPage` would mount), so the "signed in" branch is
+defensive/future-proofing today, not a path real traffic hits yet.
+
+**Feature links (brief §10):** Device Management/Storage/Transfers/Sharing/Audit — added to the
+footer's new "Explore the App" column, each going through `dashboardCtaHref` to the real
+`devices`/`files`/`transfers`/`sharing`/`security` tabs. "Audit" intentionally maps to the `security`
+tab, not an invented `/audit` route — that tab is where the real audit log/trash/ransomware-shield
+UI already lives.
+
+**How It Works:** all 6 steps now have a stable id (`#step-create-account` … `#step-verify-audit`)
+and are real `<button>`s (via `GlassCard`'s new button-mode) that scroll-and-set-hash on click —
+deep-linkable, per brief §22. Deliberately did **not** repurpose step 4 ("Connect Another Device")
+as a login/register CTA (brief §7's wording) — that would make one element mean two different things
+(step-scroll per §6 vs. account-navigation per §7); the real "connect a device" CTAs live in the
+hero, navbar, and the device-connection demo's own dedicated link instead. `ProductWorkflow`'s 7
+recap steps got the same treatment, reusing the same anchors.
+
+**Demo replay buttons are intentionally not navigation.** `DeviceConnectionDemo`'s "Connect
+Device"/"Replay" and `TransferDemo`'s "Start Transfer"/"Replay" still call no API and navigate
+nowhere — turning either into an auth-redirecting link would silently break the demo for the exact
+signed-out audience it's shown to. Each got its own separate, clearly distinct real CTA underneath
+instead ("Connect your own devices", "Move files between your own devices").
+
+**Footer:** rebuilt as four columns (brand, Product anchors, "Explore the App" real-tab links,
+Login/Get Started) — every link resolves to something real; GitHub/Documentation are still absent
+(no GitHub remote, no hosted docs — confirmed again, not just carried over from the prior pass).
+
+**Protected routes:** confirmed unchanged and untouched — `device management`/`storage`/`file
+operations`/`transfers`/`sharing`/`audit`/settings all still require `getToken()` via `App.tsx`'s
+existing guard; nothing on the landing page calls a protected API. Both animated demos remain
+client-side-only visual demonstrations, unchanged in that respect by this pass.
+
+**Verified journeys:** visitor→registration, visitor→login, visitor→learn (scroll), authenticated→
+devices (with the real pairing modal), authenticated→transfers (tab pre-selected), mobile menu
+open→navigate→close, direct-load deep link (`/#security`), and the regression check that an
+authenticated visit to `/` still renders the real, unchanged `Dashboard` — all via headless
+Chromium (desktop + mobile + `reducedMotion: 'reduce'`), zero console errors besides the expected
+`ERR_CONNECTION_REFUSED` noise from `Dashboard`'s own best-effort fetches (no backend running in this
+environment, pre-existing). `npx tsc --noEmit` and `npm run build` both clean. Resize/mobile-menu/
+full-page-scroll stress test: zero console errors, confirming GSAP `ScrollTrigger` cleanup holds up.
+
+**Remaining issues:** none identified. Two small, deliberate scope notes: `GlassCard`'s new
+button-mode is used by every clickable card/step, but `UseCases`/`CloudComparison`/`MeshExpansion`
+stay non-interactive by design (no single natural destination per card — see
+`LANDING_PAGE_NAVIGATION_AUDIT.md`'s "Known, deliberate non-links"); the `dashboardCtaHref`
+"signed-in" branch is exercised only via a seeded-token test in this environment (no live backend
+login round-trip was run here, consistent with every prior session in this file).

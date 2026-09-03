@@ -14,10 +14,12 @@ import com.peervault.common.security.JwtSupport;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -28,6 +30,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtSupport jwtSupport;
     private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final StringRedisTemplate redisTemplate;
 
     @Value("${jwt.access-ttl-seconds}")
     private long accessTtlSeconds;
@@ -35,24 +38,34 @@ public class AuthService {
     @Value("${jwt.refresh-ttl-seconds}")
     private long refreshTtlSeconds;
 
+    @Value("${peervault.auth.login-rate-limit-count:10}")
+    private long loginRateLimitCount;
+
+    @Value("${peervault.auth.login-rate-limit-window-seconds:300}")
+    private long loginRateLimitWindowSeconds;
+
     public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder, JwtSupport jwtSupport,
-                        KafkaTemplate<String, Object> kafkaTemplate) {
+                        KafkaTemplate<String, Object> kafkaTemplate, StringRedisTemplate redisTemplate) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtSupport = jwtSupport;
         this.kafkaTemplate = kafkaTemplate;
+        this.redisTemplate = redisTemplate;
     }
 
-    public AuthResponse register(String email, String rawPassword) {
+    public AuthResponse register(String email, String rawPassword, String name) {
         if (userRepository.existsByEmail(email)) {
             throw ApiException.conflict("EMAIL_TAKEN", "An account with this email already exists.");
         }
+
+        String trimmedName = (name == null || name.isBlank()) ? null : name.trim();
 
         Instant now = Instant.now();
         User user = User.builder()
                 .id(UUID.randomUUID().toString())
                 .email(email)
                 .passwordHash(passwordEncoder.encode(rawPassword))
+                .name(trimmedName)
                 .tokenVersion(0L)
                 .mfaEnabled(true)
                 .createdAt(now)
@@ -66,10 +79,15 @@ public class AuthService {
         publish(AuditEventType.AUTH, AuditSeverity.INFO, "User (" + email + ")", "Account Registered",
                 "New PeerVault control-plane account created.");
 
-        return new AuthResponse(user.getId(), user.getEmail(), accessToken, refreshToken);
+        return new AuthResponse(user.getId(), user.getEmail(), user.getName(), accessToken, refreshToken);
     }
 
     public AuthResponse login(String email, String rawPassword) {
+        // Checked before the credential lookup, keyed on the raw email as supplied — this throttles
+        // brute-forcing one account's password regardless of whether that account exists, without
+        // itself revealing anything about existence (the eventual error is the same either way).
+        enforceLoginRateLimit(email);
+
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> ApiException.unauthorized("INVALID_CREDENTIALS", "Invalid email or password."));
 
@@ -83,7 +101,7 @@ public class AuthService {
         publish(AuditEventType.AUTH, AuditSeverity.INFO, "User (" + email + ")", "Login Successful",
                 "User authenticated with email and password.");
 
-        return new AuthResponse(user.getId(), user.getEmail(), accessToken, refreshToken);
+        return new AuthResponse(user.getId(), user.getEmail(), user.getName(), accessToken, refreshToken);
     }
 
     public TokenPairResponse refresh(String refreshToken) {
@@ -152,6 +170,19 @@ public class AuthService {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> ApiException.notFound("USER_NOT_FOUND", "No account with email " + email));
         return new UserLookupDto(user.getId(), user.getEmail());
+    }
+
+    /** Fixed-window counter, same shape as share-service's {@code enforceRateLimit} / security-service's ransomware shield. */
+    private void enforceLoginRateLimit(String email) {
+        String key = "auth:login:" + email.trim().toLowerCase() + ":window";
+        Long count = redisTemplate.opsForValue().increment(key);
+        if (count != null && count == 1L) {
+            redisTemplate.expire(key, Duration.ofSeconds(loginRateLimitWindowSeconds));
+        }
+        if (count != null && count > loginRateLimitCount) {
+            throw ApiException.tooManyRequests("LOGIN_RATE_LIMITED",
+                    "Too many login attempts — try again in a few minutes.");
+        }
     }
 
     private void publish(AuditEventType eventType, AuditSeverity severity, String actor, String action, String details) {

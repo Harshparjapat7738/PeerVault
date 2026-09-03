@@ -50,6 +50,16 @@ public class Device {
     /** Who paired this device, e.g. "User (harshparjapat7738@gmail.com)" — audit detail text only. */
     private String ownerActor;
 
+    /**
+     * The account that owns this device — the {@code X-User-Id} of whoever called {@code pair/confirm}.
+     * Unlike {@link #ownerActor} (display text only) this is the real tenant-isolation key: every
+     * per-device endpoint gates on it whenever the caller supplies its own {@code X-User-Id} (i.e. a
+     * real browser request through the gateway), while internal Eureka-to-Eureka lookups (no
+     * {@code X-User-Id} header) stay unaffected — see {@code DeviceService}'s ownership helpers.
+     */
+    @Indexed
+    private String userId;
+
     /** Granted at QR-pairing confirm-time. See {@link SharingPermissionsDto}'s javadoc for scope. */
     private SharingPermissionsDto sharingPermissions;
 
@@ -236,6 +246,14 @@ public class Device {
         this.ownerActor = ownerActor;
     }
 
+    public String getUserId() {
+        return userId;
+    }
+
+    public void setUserId(String userId) {
+        this.userId = userId;
+    }
+
     public SharingPermissionsDto getSharingPermissions() {
         return sharingPermissions;
     }
@@ -354,6 +372,11 @@ public class Device {
 
         public Builder ownerActor(String ownerActor) {
             device.ownerActor = ownerActor;
+            return this;
+        }
+
+        public Builder userId(String userId) {
+            device.userId = userId;
             return this;
         }
 
