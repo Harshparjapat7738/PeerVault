@@ -1119,3 +1119,68 @@ stay non-interactive by design (no single natural destination per card — see
 `LANDING_PAGE_NAVIGATION_AUDIT.md`'s "Known, deliberate non-links"); the `dashboardCtaHref`
 "signed-in" branch is exercised only via a seeded-token test in this environment (no live backend
 login round-trip was run here, consistent with every prior session in this file).
+
+## RENDER DEPLOYMENT FIX — API Gateway Docker build — 2026-09-04
+
+Status: **COMPLETE** (build failure fixed and verified; runtime deployment of the full mesh to
+Render is a separate, not-yet-done effort — see "Remaining risks" below). Full root-cause
+evidence, reproduction steps, and exact Render dashboard values live in `RENDER_DEPLOYMENT_FIX.md`
+(repo root); this is the short version.
+
+**Root cause: Render's Docker build context was the repository root, not `backend/`.** Every
+service's Dockerfile (including `api-gateway`'s, unchanged in this respect) has always assumed
+`backend/` as the build context, since the Maven parent POM (`peervault-backend`) lives at
+`backend/pom.xml`, not the repo root — `docker-compose.yml` already builds every service this way
+successfully, and `eureka-server/Dockerfile` documents the assumption in a comment. With Render's
+Root Directory blank and Dockerfile Path `backend/api-gateway/Dockerfile`, the build context was
+the repo root; `COPY . .` copied the whole repository (no `backend/pom.xml` at that level), so
+`mvn -pl api-gateway -am` had no reactor to select `api-gateway` from. **Reproduced verbatim
+locally**: running the identical Maven command from the repo root produced
+`Could not find the selected project in the reactor: api-gateway`, character-for-character
+matching Render's log; the repo's git-tracked size (~1.05 MB) also matches Render's reported
+"1.14 MB" build-context size, confirming the context was the full repo, not a narrower directory.
+The earlier `lstat .../backend/backend: no such file` error was the same misconfiguration in the
+other direction — Root Directory `backend` + Dockerfile Path `backend/api-gateway/Dockerfile`
+double-prefixes the path.
+
+**Fix — Render dashboard config only, no module/module-path changes:**
+```
+Root Directory:     backend
+Dockerfile Path:    api-gateway/Dockerfile
+Health Check Path:  /actuator/health
+```
+
+**One real code change**, unrelated to the context bug: `backend/api-gateway/Dockerfile`'s
+`ENTRYPOINT` now passes `--server.port=${PORT:-8080}` (shell form, so `$PORT` expands) instead of
+a bare `java -jar app.jar` — `config-repo/api-gateway.yml` pins `server.port: 8080` via Config
+Server, which Render's dynamically-assigned `$PORT` would otherwise never override. Falls back to
+`8080` when `$PORT` is unset, so `docker-compose`/local `docker run` are unaffected. No other
+service's Dockerfile was touched — none of the other 9 are Render-deployed public web services,
+and all 10 already build correctly once the context is `backend/`.
+
+**Verified:** `mvn -pl api-gateway -am -DskipTests package` from `backend/` (the exact Render
+command, correct root) — PASS. Full `mvn test-compile` and `mvn -DskipTests package` across all 11
+modules — PASS. `docker build -f backend/api-gateway/Dockerfile -t peervault-api-gateway-test
+backend` (Docker Desktop started for this pass, not running by default in this environment) — PASS
+twice (one rebuild hit a transient Maven Central network flake mid-download, an identical retry
+passed clean in 214s), multi-stage image builds clean, 343.99 kB context (post-`.dockerignore`,
+matches the root-cause size analysis). `$PORT` handling verified directly by overriding the
+entrypoint to echo the shell-expanded command — `PORT=10000` → `--server.port=10000`, unset →
+`--server.port=8080` (docker-compose/local unchanged). Test image and containers removed after
+verification. `backend/.dockerignore` needed no changes — it was already correct, just not being
+applied while Render's context was the repo root (Docker only reads a `.dockerignore` at the
+context root, and there is, correctly, none at the repo root).
+
+**Remaining risks (not fixed here, flagged deliberately):**
+- **API Gateway can't fully start standalone on Render.** `spring.config.import` is `fail-fast`
+  against `CONFIG_SERVER_URI`, and every gateway route resolves via `lb://<service>` through
+  Eureka. This fix makes the **image build** succeed; making the **whole mesh** boot on Render
+  (config-server, eureka-server, and the business services all reachable, plus `MONGODB_URI`/
+  `REDIS_HOST`/`VAULT_TOKEN`/`FRONTEND_ORIGIN` set) is separate, larger follow-up work, not folded
+  in here.
+- The same Root-Directory-vs-Dockerfile-Path pattern (`Root Directory: backend`,
+  `Dockerfile Path: <service>/Dockerfile`) will be needed for every other service if/when each is
+  configured as its own Render service.
+- Every risk already listed under "Pre-deployment audit & hardening pass" above (WebSocket
+  cross-user broadcast, `sharingPermissions` enforcement, Vault dev-mode default, etc.) is
+  unchanged and unrelated to this fix.
