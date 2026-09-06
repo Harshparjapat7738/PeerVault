@@ -18,14 +18,21 @@ eureka:
 spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:kafka:9092}
-    # SASL_SSL support for an external managed Kafka (e.g. Upstash) in a real deployment — all three
-    # default to PLAINTEXT/empty, which the Kafka client simply ignores when security.protocol stays
-    # PLAINTEXT, so local docker-compose Kafka (no auth) is completely unaffected by these existing.
+    # SASL_SSL support for an external managed Kafka (e.g. Aiven) in a real deployment — every one of
+    # these defaults to PLAINTEXT/empty, which the Kafka client simply ignores when security.protocol
+    # stays PLAINTEXT, so local docker-compose Kafka (no auth) is completely unaffected by these existing.
     security:
       protocol: ${KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
     properties:
       sasl.mechanism: ${KAFKA_SASL_MECHANISM:PLAIN}
       sasl.jaas.config: ${KAFKA_SASL_JAAS_CONFIG:}
+      # Aiven (and most managed Kafka) signs its broker cert with a private CA the JVM doesn't trust
+      # by default — SASL_SSL still needs this for the TLS handshake even though auth itself is via
+      # sasl.jaas.config above, not a client certificate. ssl.truststore.type=PEM + .certificates lets
+      # the CA be pasted as a plain env var (Kafka 2.7+/KIP-651) instead of mounting a .jks file, which
+      # Render's Docker services have no easy way to do.
+      ssl.truststore.type: ${KAFKA_SSL_TRUSTSTORE_TYPE:}
+      ssl.truststore.certificates: ${KAFKA_SSL_CA_CERT:}
     consumer:
       group-id: ${spring.application.name}
       auto-offset-reset: earliest

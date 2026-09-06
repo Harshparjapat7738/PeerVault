@@ -8,10 +8,12 @@
 # Two infra pieces are DELIBERATELY NOT declared here, per the decision this blueprint assumes:
 #   - Kafka: no Render-managed offering exists. Use an external managed Kafka (Aiven for Apache
 #     Kafka's free tier is a good fit — real Kafka wire protocol + SASL_SSL, no credit card).
-#     Create the cluster first, then fill in the four sync:false Kafka vars below during Blueprint
-#     creation (KAFKA_BOOTSTRAP, KAFKA_SASL_MECHANISM, KAFKA_SASL_JAAS_CONFIG — see your Aiven
-#     console's "Connection Information" tab for the exact values; the mechanism is often
-#     SCRAM-SHA-256 or SCRAM-SHA-512, not PLAIN, on Aiven specifically — check before pasting).
+#     Create the cluster first, then fill in the sync:false Kafka vars below during Blueprint
+#     creation: KAFKA_BOOTSTRAP (host:port), KAFKA_SASL_MECHANISM (Aiven's Connection Information
+#     tab often shows SCRAM-SHA-256 or SCRAM-SHA-512, not PLAIN — check before pasting),
+#     KAFKA_SASL_JAAS_CONFIG (built from the mechanism + username + password), and KAFKA_SSL_CA_CERT
+#     (the full contents of Aiven's downloadable ca.pem, pasted as-is — SASL_SSL still needs the CA
+#     for the TLS handshake even though auth itself is via the JAAS config, not a client cert).
 #   - Redis: Render's own managed "Key Value" service works here, but this file doesn't declare it
 #     inline — the exact Blueprint syntax for that resource type wasn't verified against Render's
 #     current schema, so getting it wrong would break the whole apply. Create it once by hand in the
@@ -98,6 +100,10 @@ services:
         sync: false
       - key: KAFKA_SASL_JAAS_CONFIG
         sync: false
+      - key: KAFKA_SSL_TRUSTSTORE_TYPE
+        value: PEM
+      - key: KAFKA_SSL_CA_CERT
+        sync: false
       - key: REDIS_URL
         sync: false
 
@@ -133,6 +139,10 @@ services:
         sync: false
       - key: KAFKA_SASL_JAAS_CONFIG
         sync: false
+      - key: KAFKA_SSL_TRUSTSTORE_TYPE
+        value: PEM
+      - key: KAFKA_SSL_CA_CERT
+        sync: false
       - key: REDIS_URL
         sync: false
 
@@ -163,6 +173,10 @@ services:
       - key: KAFKA_SASL_MECHANISM
         sync: false
       - key: KAFKA_SASL_JAAS_CONFIG
+        sync: false
+      - key: KAFKA_SSL_TRUSTSTORE_TYPE
+        value: PEM
+      - key: KAFKA_SSL_CA_CERT
         sync: false
       - key: REDIS_URL
         sync: false
@@ -195,6 +209,10 @@ services:
         sync: false
       - key: KAFKA_SASL_JAAS_CONFIG
         sync: false
+      - key: KAFKA_SSL_TRUSTSTORE_TYPE
+        value: PEM
+      - key: KAFKA_SSL_CA_CERT
+        sync: false
       - key: REDIS_URL
         sync: false
 
@@ -226,6 +244,10 @@ services:
         sync: false
       - key: KAFKA_SASL_JAAS_CONFIG
         sync: false
+      - key: KAFKA_SSL_TRUSTSTORE_TYPE
+        value: PEM
+      - key: KAFKA_SSL_CA_CERT
+        sync: false
       - key: REDIS_URL
         sync: false
 
@@ -256,6 +278,10 @@ services:
       - key: KAFKA_SASL_MECHANISM
         sync: false
       - key: KAFKA_SASL_JAAS_CONFIG
+        sync: false
+      - key: KAFKA_SSL_TRUSTSTORE_TYPE
+        value: PEM
+      - key: KAFKA_SSL_CA_CERT
         sync: false
       - key: REDIS_URL
         sync: false
@@ -290,6 +316,10 @@ services:
         sync: false
       - key: KAFKA_SASL_JAAS_CONFIG
         sync: false
+      - key: KAFKA_SSL_TRUSTSTORE_TYPE
+        value: PEM
+      - key: KAFKA_SSL_CA_CERT
+        sync: false
       - key: REDIS_URL
         sync: false
 
@@ -320,6 +350,10 @@ services:
       - key: KAFKA_SASL_MECHANISM
         sync: false
       - key: KAFKA_SASL_JAAS_CONFIG
+        sync: false
+      - key: KAFKA_SSL_TRUSTSTORE_TYPE
+        value: PEM
+      - key: KAFKA_SSL_CA_CERT
         sync: false
       - key: REDIS_URL
         sync: false
