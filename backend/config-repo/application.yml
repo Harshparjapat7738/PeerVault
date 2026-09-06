@@ -4,7 +4,10 @@
 eureka:
   client:
     service-url:
-      defaultZone: ${EUREKA_URI:http://eureka-server:8761/eureka/}
+      # Same EUREKA_URI-overrides-else-built-from-host/port pattern as config-server's own bootstrap
+      # file — lets a Render Blueprint wire this via fromService's separate host/port properties
+      # instead of a pre-assembled URL string.
+      defaultZone: ${EUREKA_URI:http://${EUREKA_HOST:eureka-server}:${EUREKA_PORT:8761}/eureka/}
     register-with-eureka: true
     fetch-registry: true
   instance:
@@ -15,6 +18,14 @@ eureka:
 spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:kafka:9092}
+    # SASL_SSL support for an external managed Kafka (e.g. Upstash) in a real deployment — all three
+    # default to PLAINTEXT/empty, which the Kafka client simply ignores when security.protocol stays
+    # PLAINTEXT, so local docker-compose Kafka (no auth) is completely unaffected by these existing.
+    security:
+      protocol: ${KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
+    properties:
+      sasl.mechanism: ${KAFKA_SASL_MECHANISM:PLAIN}
+      sasl.jaas.config: ${KAFKA_SASL_JAAS_CONFIG:}
     consumer:
       group-id: ${spring.application.name}
       auto-offset-reset: earliest
@@ -31,6 +42,11 @@ spring:
       # per-listener default-type wiring.
   data:
     redis:
+      # REDIS_URL (e.g. Render's managed Redis "rediss://:<password>@<host>:<port>") takes over
+      # host/port/ssl/password entirely when set — Spring Boot's RedisConnectionConfiguration only
+      # consumes it when non-blank, so leaving it unset (local docker-compose) falls through to the
+      # plain host/port below exactly as before.
+      url: ${REDIS_URL:}
       host: ${REDIS_HOST:redis}
       port: ${REDIS_PORT:6379}
     mongodb:

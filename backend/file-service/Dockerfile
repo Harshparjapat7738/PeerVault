@@ -7,4 +7,4 @@ FROM eclipse-temurin:21-jre
 WORKDIR /app
 COPY --from=build /workspace/file-service/target/file-service.jar app.jar
 EXPOSE 8083
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+ENTRYPOINT ["sh", "-c", "java -jar /app/app.jar --server.port=${PORT:-8083}"]

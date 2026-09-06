@@ -1,0 +1,22 @@
+# Activated on Render via SPRING_PROFILES_ACTIVE=composite,render (the base "composite" profile
+# must stay active too — it's what turns on Spring Cloud Config's composite-repository mode at all,
+# see application.yml's comment on spring.profiles.active). This profile-specific document replaces
+# application.yml's composite list wholesale (Spring Boot's profile precedence, not a merge) with a
+# native-only source — no Vault backend, per the deliberate call to drop Vault for the Render
+# deployment (backend/CLAUDE.md's dev-mode-Vault warning) rather than stand up a real init/unseal
+# flow for a personal single-user project.
+#
+# Consequence: config-server no longer serves `jwt.secret` (or any other Vault-seeded key) to
+# anything. Every service that reads jwt.secret directly (api-gateway, auth-service —
+# see SecurityBeansConfig / AuthConfig) must get it some other way in this profile: set JWT_SECRET
+# as a plain Render env var on each of those two services. Spring Boot's relaxed environment-variable
+# binding maps JWT_SECRET -> the jwt.secret property automatically, and a local OS env var takes
+# precedence over anything config-server would otherwise supply, so this "just works" with zero code
+# changes on the consuming side.
+spring:
+  cloud:
+    config:
+      server:
+        composite:
+          - type: native
+            search-locations: ${CONFIG_REPO_LOCATION:file:../config-repo}

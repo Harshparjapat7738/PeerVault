@@ -2,7 +2,10 @@ spring:
   application:
     name: notification-service
   config:
-    import: "configserver:${CONFIG_SERVER_URI:http://localhost:8888}"
+    # CONFIG_SERVER_URI overrides the whole URL when set (local/manual); otherwise built from
+    # CONFIG_SERVER_HOST/CONFIG_SERVER_PORT, since a Render Blueprint's fromService can only hand
+    # back separate host/port values, not a pre-assembled URL string.
+    import: "configserver:${CONFIG_SERVER_URI:http://${CONFIG_SERVER_HOST:localhost}:${CONFIG_SERVER_PORT:8888}}"
   cloud:
     config:
       # Config Server's composite backend includes a Vault entry, which requires every client request

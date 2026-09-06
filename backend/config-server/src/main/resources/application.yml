@@ -31,7 +31,10 @@ eureka:
     register-with-eureka: true
     fetch-registry: true
     service-url:
-      defaultZone: ${EUREKA_URI:http://localhost:8761/eureka/}
+      # Same EUREKA_URI-overrides-else-built-from-host/port pattern as CONFIG_SERVER_URI in the
+      # business services' bootstrap files — lets a Render Blueprint wire this via fromService's
+      # separate host/port properties instead of a pre-assembled URL string.
+      defaultZone: ${EUREKA_URI:http://${EUREKA_HOST:localhost}:${EUREKA_PORT:8761}/eureka/}
   instance:
     prefer-ip-address: true
 

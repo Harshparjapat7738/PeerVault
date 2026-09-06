@@ -1,0 +1,325 @@
+# PeerVault backend — full-mesh Render Blueprint.
+#
+# Deploys all 10 buildable backend modules (everything under backend/pom.xml's <modules> except
+# `common`, which has no Dockerfile and isn't a standalone service) as one set, wired together via
+# Render's private networking (fromService) instead of hand-filling each service's env vars one at
+# a time through the New Web Service form.
+#
+# Two infra pieces are DELIBERATELY NOT declared here, per the decision this blueprint assumes:
+#   - Kafka: no Render-managed offering exists. Use an external managed Kafka (Aiven for Apache
+#     Kafka's free tier is a good fit — real Kafka wire protocol + SASL_SSL, no credit card).
+#     Create the cluster first, then fill in the four sync:false Kafka vars below during Blueprint
+#     creation (KAFKA_BOOTSTRAP, KAFKA_SASL_MECHANISM, KAFKA_SASL_JAAS_CONFIG — see your Aiven
+#     console's "Connection Information" tab for the exact values; the mechanism is often
+#     SCRAM-SHA-256 or SCRAM-SHA-512, not PLAIN, on Aiven specifically — check before pasting).
+#   - Redis: Render's own managed "Key Value" service works here, but this file doesn't declare it
+#     inline — the exact Blueprint syntax for that resource type wasn't verified against Render's
+#     current schema, so getting it wrong would break the whole apply. Create it once by hand in the
+#     Render dashboard (New -> Key Value, free plan is fine — no persistence, which is fine for rate
+#     limiting/session cache), then paste its "Internal Redis URL" into REDIS_URL below.
+#   - Vault: dropped for this deployment entirely (see config-server/src/main/resources/
+#     application-render.yml) — jwt.secret is supplied directly via the JWT_SECRET env var on
+#     api-gateway and auth-service instead (Spring Boot's relaxed env-var binding maps JWT_SECRET ->
+#     jwt.secret automatically, and it wins over anything config-server would otherwise supply).
+#   - MongoDB: already external (Atlas) — just paste your connection string into MONGODB_URI.
+#
+# Cost note: Render private services (pserv) have no free plan — the 9 non-public services below
+# are each at least the $7/mo "0.5c-512mb" plan (~$63/mo total). api-gateway is left on `free`
+# below to match the original dashboard form, but a free web service spins down after inactivity;
+# switch its plan to 0.5c-512mb too ($7/mo more) if you want it always-on.
+#
+# Every fromService pair below (`_HOST`/`_PORT`) exists because Render's Blueprint fromService
+# returns separate host/port values, not a pre-assembled URL — the target services' bootstrap
+# application.yml files were updated to build their config-server/Eureka URLs from these two pieces
+# (falling back to the original hardcoded local defaults when unset, so local dev is unaffected).
+
+services:
+  # ─────────────────────────── Discovery & Config (no external deps) ───────────────────────────
+
+  - type: pserv
+    name: eureka-server
+    runtime: docker
+    region: oregon
+    plan: 0.5c-512mb
+    branch: main
+    rootDir: backend
+    dockerContext: backend
+    dockerfilePath: backend/eureka-server/Dockerfile
+
+  - type: pserv
+    name: config-server
+    runtime: docker
+    region: oregon
+    plan: 0.5c-512mb
+    branch: main
+    rootDir: backend
+    dockerContext: backend
+    dockerfilePath: backend/config-server/Dockerfile
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: composite,render
+      - key: EUREKA_HOST
+        fromService: { name: eureka-server, type: pserv, property: host }
+      - key: EUREKA_PORT
+        fromService: { name: eureka-server, type: pserv, property: port }
+
+  # ────────────────────────────────── Public entrypoint ──────────────────────────────────
+
+  - type: web
+    name: api-gateway
+    runtime: docker
+    region: oregon
+    plan: free
+    branch: main
+    rootDir: backend
+    dockerContext: backend
+    dockerfilePath: backend/api-gateway/Dockerfile
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: CONFIG_SERVER_HOST
+        fromService: { name: config-server, type: pserv, property: host }
+      - key: CONFIG_SERVER_PORT
+        fromService: { name: config-server, type: pserv, property: port }
+      - key: EUREKA_HOST
+        fromService: { name: eureka-server, type: pserv, property: host }
+      - key: EUREKA_PORT
+        fromService: { name: eureka-server, type: pserv, property: port }
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: KAFKA_BOOTSTRAP
+        sync: false
+      - key: KAFKA_SECURITY_PROTOCOL
+        value: SASL_SSL
+      - key: KAFKA_SASL_MECHANISM
+        sync: false
+      - key: KAFKA_SASL_JAAS_CONFIG
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+  # ────────────────────────────────── Business services ──────────────────────────────────
+
+  - type: pserv
+    name: auth-service
+    runtime: docker
+    region: oregon
+    plan: 0.5c-512mb
+    branch: main
+    rootDir: backend
+    dockerContext: backend
+    dockerfilePath: backend/auth-service/Dockerfile
+    envVars:
+      - key: CONFIG_SERVER_HOST
+        fromService: { name: config-server, type: pserv, property: host }
+      - key: CONFIG_SERVER_PORT
+        fromService: { name: config-server, type: pserv, property: port }
+      - key: EUREKA_HOST
+        fromService: { name: eureka-server, type: pserv, property: host }
+      - key: EUREKA_PORT
+        fromService: { name: eureka-server, type: pserv, property: port }
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: KAFKA_BOOTSTRAP
+        sync: false
+      - key: KAFKA_SECURITY_PROTOCOL
+        value: SASL_SSL
+      - key: KAFKA_SASL_MECHANISM
+        sync: false
+      - key: KAFKA_SASL_JAAS_CONFIG
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+  - type: pserv
+    name: device-service
+    runtime: docker
+    region: oregon
+    plan: 0.5c-512mb
+    branch: main
+    rootDir: backend
+    dockerContext: backend
+    dockerfilePath: backend/device-service/Dockerfile
+    envVars:
+      - key: CONFIG_SERVER_HOST
+        fromService: { name: config-server, type: pserv, property: host }
+      - key: CONFIG_SERVER_PORT
+        fromService: { name: config-server, type: pserv, property: port }
+      - key: EUREKA_HOST
+        fromService: { name: eureka-server, type: pserv, property: host }
+      - key: EUREKA_PORT
+        fromService: { name: eureka-server, type: pserv, property: port }
+      - key: MONGODB_URI
+        sync: false
+      - key: KAFKA_BOOTSTRAP
+        sync: false
+      - key: KAFKA_SECURITY_PROTOCOL
+        value: SASL_SSL
+      - key: KAFKA_SASL_MECHANISM
+        sync: false
+      - key: KAFKA_SASL_JAAS_CONFIG
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+  - type: pserv
+    name: file-service
+    runtime: docker
+    region: oregon
+    plan: 0.5c-512mb
+    branch: main
+    rootDir: backend
+    dockerContext: backend
+    dockerfilePath: backend/file-service/Dockerfile
+    envVars:
+      - key: CONFIG_SERVER_HOST
+        fromService: { name: config-server, type: pserv, property: host }
+      - key: CONFIG_SERVER_PORT
+        fromService: { name: config-server, type: pserv, property: port }
+      - key: EUREKA_HOST
+        fromService: { name: eureka-server, type: pserv, property: host }
+      - key: EUREKA_PORT
+        fromService: { name: eureka-server, type: pserv, property: port }
+      - key: MONGODB_URI
+        sync: false
+      - key: KAFKA_BOOTSTRAP
+        sync: false
+      - key: KAFKA_SECURITY_PROTOCOL
+        value: SASL_SSL
+      - key: KAFKA_SASL_MECHANISM
+        sync: false
+      - key: KAFKA_SASL_JAAS_CONFIG
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+  - type: pserv
+    name: transfer-service
+    runtime: docker
+    region: oregon
+    plan: 0.5c-512mb
+    branch: main
+    rootDir: backend
+    dockerContext: backend
+    dockerfilePath: backend/transfer-service/Dockerfile
+    envVars:
+      - key: CONFIG_SERVER_HOST
+        fromService: { name: config-server, type: pserv, property: host }
+      - key: CONFIG_SERVER_PORT
+        fromService: { name: config-server, type: pserv, property: port }
+      - key: EUREKA_HOST
+        fromService: { name: eureka-server, type: pserv, property: host }
+      - key: EUREKA_PORT
+        fromService: { name: eureka-server, type: pserv, property: port }
+      - key: MONGODB_URI
+        sync: false
+      - key: KAFKA_BOOTSTRAP
+        sync: false
+      - key: KAFKA_SECURITY_PROTOCOL
+        value: SASL_SSL
+      - key: KAFKA_SASL_MECHANISM
+        sync: false
+      - key: KAFKA_SASL_JAAS_CONFIG
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+  - type: pserv
+    name: security-service
+    runtime: docker
+    region: oregon
+    plan: 0.5c-512mb
+    branch: main
+    rootDir: backend
+    dockerContext: backend
+    dockerfilePath: backend/security-service/Dockerfile
+    envVars:
+      - key: CONFIG_SERVER_HOST
+        fromService: { name: config-server, type: pserv, property: host }
+      - key: CONFIG_SERVER_PORT
+        fromService: { name: config-server, type: pserv, property: port }
+      - key: EUREKA_HOST
+        fromService: { name: eureka-server, type: pserv, property: host }
+      - key: EUREKA_PORT
+        fromService: { name: eureka-server, type: pserv, property: port }
+      - key: MONGODB_URI
+        sync: false
+      - key: KAFKA_BOOTSTRAP
+        sync: false
+      - key: KAFKA_SECURITY_PROTOCOL
+        value: SASL_SSL
+      - key: KAFKA_SASL_MECHANISM
+        sync: false
+      - key: KAFKA_SASL_JAAS_CONFIG
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+  - type: pserv
+    name: notification-service
+    runtime: docker
+    region: oregon
+    plan: 0.5c-512mb
+    branch: main
+    rootDir: backend
+    dockerContext: backend
+    dockerfilePath: backend/notification-service/Dockerfile
+    envVars:
+      - key: CONFIG_SERVER_HOST
+        fromService: { name: config-server, type: pserv, property: host }
+      - key: CONFIG_SERVER_PORT
+        fromService: { name: config-server, type: pserv, property: port }
+      - key: EUREKA_HOST
+        fromService: { name: eureka-server, type: pserv, property: host }
+      - key: EUREKA_PORT
+        fromService: { name: eureka-server, type: pserv, property: port }
+      - key: MONGODB_URI
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: KAFKA_BOOTSTRAP
+        sync: false
+      - key: KAFKA_SECURITY_PROTOCOL
+        value: SASL_SSL
+      - key: KAFKA_SASL_MECHANISM
+        sync: false
+      - key: KAFKA_SASL_JAAS_CONFIG
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+  - type: pserv
+    name: share-service
+    runtime: docker
+    region: oregon
+    plan: 0.5c-512mb
+    branch: main
+    rootDir: backend
+    dockerContext: backend
+    dockerfilePath: backend/share-service/Dockerfile
+    envVars:
+      - key: CONFIG_SERVER_HOST
+        fromService: { name: config-server, type: pserv, property: host }
+      - key: CONFIG_SERVER_PORT
+        fromService: { name: config-server, type: pserv, property: port }
+      - key: EUREKA_HOST
+        fromService: { name: eureka-server, type: pserv, property: host }
+      - key: EUREKA_PORT
+        fromService: { name: eureka-server, type: pserv, property: port }
+      - key: MONGODB_URI
+        sync: false
+      - key: KAFKA_BOOTSTRAP
+        sync: false
+      - key: KAFKA_SECURITY_PROTOCOL
+        value: SASL_SSL
+      - key: KAFKA_SASL_MECHANISM
+        sync: false
+      - key: KAFKA_SASL_JAAS_CONFIG
+        sync: false
+      - key: REDIS_URL
+        sync: false
