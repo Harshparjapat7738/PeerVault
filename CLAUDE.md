@@ -42,10 +42,53 @@ bind-mounts the live directory over it). Also trimmed `render.yaml`: removed Kaf
 `spring-data-redis` dependency (`device`/`file`/`transfer`/`notification`-service) — both were
 unused-but-harmless, not missing, but would have asked for credentials four services never read.
 
-**Not independently verified this pass:** no Docker daemon was reachable in this sandbox, so the
-config-server image fix is verified by static analysis + parity with the already-working
+**Not independently verified in that pass:** no Docker daemon was reachable in this sandbox, so the
+config-server image fix was verified by static analysis + parity with the already-working
 `backend/Dockerfile`, not by an actual `docker build`/`docker run`. No live Render deploy or
 end-to-end Eureka registration was run (no Render account/external Mongo-Kafka-Redis instances in
 this sandbox). See `RENDER_DEPLOYMENT.md`'s "Verification status" for the exact commands to run
-before trusting this in production, and its "Known limitations" for pre-existing gaps this pass
+before trusting this in production, and its "Known limitations" for pre-existing gaps that pass
 didn't touch (per-user WebSocket broadcast isolation, `sharingPermissions` enforcement).
+
+## Production incident — 2026-09-06 (Eureka 0 instances + frontend "Page Not Found")
+
+Full diagnosis is in `RENDER_DEPLOYMENT.md`'s "Incident" section at the bottom — this is the summary.
+
+**Frontend "Page Not Found": ROOT CAUSE FOUND AND FIXED, code-level.** Not a backend issue.
+`frontend/src/components/landing/{Footer,Navbar,FinalCTA}.tsx` link to `/login` with plain
+`<a href="/login">` tags — real full-page browser navigations, confirmed via
+`grep -rn "'/login'" frontend/src`. `frontend/vercel.json` had no SPA-fallback rewrite, so the
+static host 404'd on `/login` before the app's own client-side router (`App.tsx`, which reads
+`window.location.pathname`) ever got a chance to run. **Fixed:** added the standard Vercel SPA
+rewrite to `vercel.json` (`{"source": "/(.*)", "destination": "/index.html"}`). If the frontend is
+instead/also served from a Render Static Site, the equivalent fix (not yet applied — unconfirmed
+which host is live) is that service's Redirects/Rewrites dashboard tab: Source `/*` → Destination
+`/index.html`, Action `Rewrite`.
+
+**Eureka 0 instances: MOST LIKELY ROOT CAUSE IDENTIFIED, NOT LIVE-CONFIRMED.** All repo-side
+Eureka/Config Server wiring was re-verified correct this pass (every `render.yaml` `fromService`
+reference matches a real declared service; `config-repo/application.yml`'s fallback chain is sound;
+`eureka-server` has no Spring Security on its classpath to silently 401 registrations). Leading
+hypothesis: **the `render.yaml` Blueprint may never have actually been applied** on the live Render
+account — the 10 services may still be the ones created individually via the dashboard (per
+`RENDER_DEPLOYMENT_FIX.md`'s original, pre-`render.yaml` instructions), which never received
+`fromService`-derived env vars (a Blueprint-only mechanism). Every client then falls back to
+`config-repo/application.yml`'s literal defaults — `EUREKA_HOST` defaults to the docker-compose
+service name `eureka-server`, unresolvable on Render's private network (real hostnames are
+`<name>-<random-suffix>`) — and every business service's `CONFIG_SERVER_HOST` likewise falls back
+to `localhost:8888`, which with `fail-fast: true` would crash-loop every business service and
+api-gateway before they ever reach Eureka-registration code. This also explains API calls failing
+even after the frontend fix, and is consistent with Render still showing "Deployed" (private
+services have no `healthCheckPath`-based liveness gate). **3-step manual check and the exact fix**
+(apply the Blueprint via Render's "New → Blueprint" — it adopts the existing same-named services,
+per Render's own docs, rather than duplicating them) are in `RENDER_DEPLOYMENT.md`'s incident
+section. No code or `render.yaml` change was made for this: the repo-side config is already correct,
+and the fix (if this hypothesis holds) is a one-time dashboard action, not a code change.
+
+**Files modified this pass:** `frontend/vercel.json` only. **Files NOT modified:** `render.yaml`,
+every backend Dockerfile/config file, every Eureka/Gateway route — all re-verified correct, no
+defect found in any of them.
+
+**BLOCKED — INFRASTRUCTURE UNAVAILABLE:** confirming which Eureka scenario is live, and confirming
+the frontend fix actually resolves `/login` in production, both require Render/Vercel dashboard
+access not available in this sandbox. See `RENDER_DEPLOYMENT.md` for the exact manual steps to run.
