@@ -92,20 +92,10 @@ services:
         sync: false
       - key: FRONTEND_ORIGIN
         sync: false
-      - key: KAFKA_BOOTSTRAP
-        sync: false
-      - key: KAFKA_SECURITY_PROTOCOL
-        value: SASL_SSL
-      - key: KAFKA_SASL_MECHANISM
-        sync: false
-      - key: KAFKA_SASL_JAAS_CONFIG
-        sync: false
-      - key: KAFKA_SSL_TRUSTSTORE_TYPE
-        value: PEM
-      - key: KAFKA_SSL_CA_CERT
-        sync: false
       - key: REDIS_URL
         sync: false
+      # No KAFKA_* vars here — api-gateway has no spring-kafka dependency and never talks to Kafka
+      # (see backend/api-gateway/pom.xml); only the 7 business services below do.
 
   # ────────────────────────────────── Business services ──────────────────────────────────
 
@@ -178,8 +168,7 @@ services:
         value: PEM
       - key: KAFKA_SSL_CA_CERT
         sync: false
-      - key: REDIS_URL
-        sync: false
+      # No REDIS_URL — device-service has no spring-data-redis dependency.
 
   - type: pserv
     name: file-service
@@ -213,8 +202,7 @@ services:
         value: PEM
       - key: KAFKA_SSL_CA_CERT
         sync: false
-      - key: REDIS_URL
-        sync: false
+      # No REDIS_URL — file-service has no spring-data-redis dependency.
 
   - type: pserv
     name: transfer-service
@@ -248,8 +236,7 @@ services:
         value: PEM
       - key: KAFKA_SSL_CA_CERT
         sync: false
-      - key: REDIS_URL
-        sync: false
+      # No REDIS_URL — transfer-service has no spring-data-redis dependency.
 
   - type: pserv
     name: security-service
@@ -320,8 +307,7 @@ services:
         value: PEM
       - key: KAFKA_SSL_CA_CERT
         sync: false
-      - key: REDIS_URL
-        sync: false
+      # No REDIS_URL — notification-service has no spring-data-redis dependency.
 
   - type: pserv
     name: share-service
